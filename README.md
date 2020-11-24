@@ -48,7 +48,7 @@ are pluggable and allows Go Micro to be runtime agnostic. You can plugin any und
 
 ## Getting Started
 
-See [pkg.go.dev](https://pkg.go.dev/github.com/micro/go-micro/v2@v2.9.1) for usage.
+See [pkg.go.dev](https://pkg.go.dev/github.com/micro/go-micro/v2@v2.9.1) or [community docs](https://micro.arch.run/docs) for usage.
 
 ## License
 
