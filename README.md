@@ -48,9 +48,9 @@ are pluggable and allows Go Micro to be runtime agnostic. You can plugin any und
 
 ## Getting Started
 
-See [pkg.go.dev](https://pkg.go.dev/github.com/micro/go-micro?tab=doc) for usage.
+See [pkg.go.dev](https://pkg.go.dev/github.com/micro/go-micro/v2@v2.9.1) for usage.
 
 ## License
 
-Go Micro is Apache 2.0 licensed.
+Go Micro(v2) is Apache 2.0 licensed.
 
