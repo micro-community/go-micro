@@ -22,7 +22,7 @@ type Options struct {
 	Router    router.Router
 	Selector  selector.Selector
 	Transport transport.Transport
-
+	Registry  registry.Registry
 	// Connection Pool
 	PoolSize int
 	PoolTTL  time.Duration
