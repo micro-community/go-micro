@@ -44,13 +44,13 @@ leadership are built in as a Sync interface. When using an eventually consistent
 
 - **Pluggable Interfaces** - Go Micro makes use of Go interfaces for each distributed system abstraction. Because of this these interfaces 
 are pluggable and allows Go Micro to be runtime agnostic. You can plugin any underlying technology. Find plugins in 
-[github.com/micro/go-plugins](https://github.com/micro/go-plugins).
+[github.com/micro-community/go-plugins](https://github.com/micro-community/go-plugins).
 
 ## Getting Started
 
-See [pkg.go.dev](https://pkg.go.dev/github.com/micro/go-micro?tab=doc) for usage.
+See [pkg.go.dev](https://pkg.go.dev/github.com/micro/go-micro/v2@v2.9.1) or [community docs](https://micro.arch.run/docs) for usage.
 
 ## License
 
-Go Micro is Apache 2.0 licensed.
+Go Micro(v2) is Apache 2.0 licensed.
 
