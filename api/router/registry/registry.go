@@ -99,7 +99,7 @@ func (r *registryRouter) process(res *registry.Result) {
 	service, err := r.rc.GetService(res.Service.Name)
 	if err != nil {
 		if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-			logger.Errorf("unable to get service: %v", err)
+			logger.Errorf("unable to get %v service: %v", res.Service.Name, err)
 		}
 		return
 	}
@@ -260,7 +260,7 @@ func (r *registryRouter) watch() {
 			res, err := w.Next()
 			if err != nil {
 				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-					logger.Errorf("error getting next endoint: %v", err)
+					logger.Errorf("error getting next endpoint: %v", err)
 				}
 				close(ch)
 				break
@@ -434,7 +434,7 @@ func (r *registryRouter) Route(req *http.Request) (*api.Service, error) {
 	name := rp.Name
 
 	// get service
-	services, err := r.rc.GetService(name)
+	services, err := r.rc.GetService(name, registry.GetDomain(rp.Domain))
 	if err != nil {
 		return nil, err
 	}

@@ -120,7 +120,7 @@ func (s *service) register() error {
 		return nil
 	}
 	// default to service registry
-	r := s.opts.Service.Client().Options().Registry
+	r := s.opts.Service.Options().Registry
 	// switch to option if specified
 	if s.opts.Registry != nil {
 		r = s.opts.Registry
@@ -141,10 +141,16 @@ func (s *service) register() error {
 
 	var regErr error
 
+	// register options
+	rOpts := []registry.RegisterOption{
+		registry.RegisterTTL(s.opts.RegisterTTL),
+		registry.RegisterDomain(s.opts.Service.Server().Options().Namespace),
+	}
+
 	// try three times if necessary
 	for i := 0; i < 3; i++ {
 		// attempt to register
-		if err := r.Register(s.srv, registry.RegisterTTL(s.opts.RegisterTTL)); err != nil {
+		if err := r.Register(s.srv, rOpts...); err != nil {
 			// set the error
 			regErr = err
 			// backoff then retry
@@ -167,7 +173,7 @@ func (s *service) deregister() error {
 		return nil
 	}
 	// default to service registry
-	r := s.opts.Service.Client().Options().Registry
+	r := s.opts.Service.Options().Registry
 	// switch to option if specified
 	if s.opts.Registry != nil {
 		r = s.opts.Registry
@@ -296,7 +302,7 @@ func (s *service) stop() error {
 
 func (s *service) Client() *http.Client {
 	rt := mhttp.NewRoundTripper(
-		mhttp.WithRegistry(s.opts.Registry),
+		mhttp.WithRouter(s.opts.Service.Options().Router),
 	)
 	return &http.Client{
 		Transport: rt,
@@ -443,9 +449,7 @@ func (s *service) Init(opts ...Option) error {
 
 func (s *service) Run() error {
 	// generate an auth account
-	srvID := s.opts.Service.Server().Options().Id
-	srvName := s.Options().Name
-	if err := authutil.Generate(srvID, srvName, s.opts.Service.Options().Auth); err != nil {
+	if err := authutil.Verify(s.opts.Service.Options().Auth); err != nil {
 		return err
 	}
 

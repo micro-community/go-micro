@@ -136,6 +136,16 @@ type authWrapper struct {
 }
 
 func (a *authWrapper) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
+	ctx = a.wrapContext(ctx, opts...)
+	return a.Client.Call(ctx, req, rsp, opts...)
+}
+
+func (a *authWrapper) Stream(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
+	ctx = a.wrapContext(ctx, opts...)
+	return a.Client.Stream(ctx, req, opts...)
+}
+
+func (a *authWrapper) wrapContext(ctx context.Context, opts ...client.CallOption) context.Context {
 	// parse the options
 	var options client.CallOptions
 	for _, o := range opts {
@@ -146,30 +156,30 @@ func (a *authWrapper) Call(ctx context.Context, req client.Request, rsp interfac
 	// We dont't override the header unless the ServiceToken option has
 	// been specified or the header wasn't provided
 	if _, ok := metadata.Get(ctx, "Authorization"); ok && !options.ServiceToken {
-		return a.Client.Call(ctx, req, rsp, opts...)
+		return ctx
 	}
 
 	// if auth is nil we won't be able to get an access token, so we execute
 	// the request without one.
 	aa := a.auth()
 	if aa == nil {
-		return a.Client.Call(ctx, req, rsp, opts...)
+		return ctx
 	}
 
 	// set the namespace header if it has not been set (e.g. on a service to service request)
 	if _, ok := metadata.Get(ctx, "Micro-Namespace"); !ok {
-		ctx = metadata.Set(ctx, "Micro-Namespace", aa.Options().Namespace)
+		ctx = metadata.Set(ctx, "Micro-Namespace", aa.Options().Issuer)
 	}
 
 	// check to see if we have a valid access token
 	aaOpts := aa.Options()
 	if aaOpts.Token != nil && !aaOpts.Token.Expired() {
 		ctx = metadata.Set(ctx, "Authorization", auth.BearerScheme+aaOpts.Token.AccessToken)
-		return a.Client.Call(ctx, req, rsp, opts...)
+		return ctx
 	}
 
 	// call without an auth token
-	return a.Client.Call(ctx, req, rsp, opts...)
+	return ctx
 }
 
 // AuthClient wraps requests with the auth header
@@ -177,10 +187,28 @@ func AuthClient(auth func() auth.Auth, c client.Client) client.Client {
 	return &authWrapper{c, auth}
 }
 
+func AuthHandlerNamespace(ns string) AuthHandlerOption {
+	return func(o *AuthHandlerOptions) {
+		o.Namespace = ns
+	}
+}
+
+type AuthHandlerOption func(o *AuthHandlerOptions)
+
+type AuthHandlerOptions struct {
+	Namespace string
+}
+
 // AuthHandler wraps a server handler to perform auth
-func AuthHandler(fn func() auth.Auth) server.HandlerWrapper {
+func AuthHandler(fn func() auth.Auth, opts ...AuthHandlerOption) server.HandlerWrapper {
 	return func(h server.HandlerFunc) server.HandlerFunc {
 		return func(ctx context.Context, req server.Request, rsp interface{}) error {
+			// parse the options
+			options := AuthHandlerOptions{}
+			for _, o := range opts {
+				o(&options)
+			}
+
 			// get the auth.Auth interface
 			a := fn()
 
@@ -189,30 +217,33 @@ func AuthHandler(fn func() auth.Auth) server.HandlerWrapper {
 				return h(ctx, req, rsp)
 			}
 
-			// Extract the token if present. Note: if noop is being used
-			// then the token can be blank without erroring
-			var account *auth.Account
+			// Extract the token if the header is present. We will inspect the token regardless of if it's
+			// present or not since noop auth will return a blank account upon Inspecting a blank token.
+			var token string
 			if header, ok := metadata.Get(ctx, "Authorization"); ok {
 				// Ensure the correct scheme is being used
 				if !strings.HasPrefix(header, auth.BearerScheme) {
 					return errors.Unauthorized(req.Service(), "invalid authorization header. expected Bearer schema")
 				}
 
-				// Strip the prefix and inspect the resulting token
-				account, _ = a.Inspect(strings.TrimPrefix(header, auth.BearerScheme))
+				// Strip the bearer scheme prefix
+				token = strings.TrimPrefix(header, auth.BearerScheme)
 			}
+
+			// Inspect the token and decode an account
+			account, _ := a.Inspect(token)
 
 			// Extract the namespace header
 			ns, ok := metadata.Get(ctx, "Micro-Namespace")
 			if !ok {
-				ns = a.Options().Namespace
+				ns = a.Options().Issuer
 				ctx = metadata.Set(ctx, "Micro-Namespace", ns)
 			}
 
-			// Check the issuer matches the services namespace. TODO: Stop allowing go.micro to access
+			// Check the issuer matches the services namespace. TODO: Stop allowing micro to access
 			// any namespace and instead check for the server issuer.
-			if account != nil && account.Issuer != ns && account.Issuer != "go.micro" {
-				return errors.Forbidden(req.Service(), "Account was not issued by %v", ns)
+			if account != nil && account.Issuer != ns && account.Issuer != "micro" {
+				return errors.Forbidden(req.Service(), "Account was issued by %v, not %v", account.Issuer, ns)
 			}
 
 			// construct the resource
@@ -222,12 +253,22 @@ func AuthHandler(fn func() auth.Auth) server.HandlerWrapper {
 				Endpoint: req.Endpoint(),
 			}
 
-			// Verify the caller has access to the resource
-			err := a.Verify(account, res, auth.VerifyContext(ctx))
-			if err != nil && account != nil {
+			// Normal services set the namespace to prevent it being overriden
+			// by setting the Namespace header, however this isn't the case for
+			// the proxy which uses the namespace header when routing requests
+			// to a specific network.
+			if len(options.Namespace) == 0 {
+				options.Namespace = ns
+			}
+
+			// Verify the caller has access to the resource.
+			err := a.Verify(account, res, auth.VerifyNamespace(options.Namespace))
+			if err == auth.ErrForbidden && account != nil {
 				return errors.Forbidden(req.Service(), "Forbidden call made to %v:%v by %v", req.Service(), req.Endpoint(), account.ID)
-			} else if err != nil {
+			} else if err == auth.ErrForbidden {
 				return errors.Unauthorized(req.Service(), "Unauthorized call made to %v:%v", req.Service(), req.Endpoint())
+			} else if err != nil {
+				return errors.InternalServerError(req.Service(), "Error authorizing request: %v", err)
 			}
 
 			// There is an account, set it in the context

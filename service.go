@@ -9,7 +9,7 @@ import (
 
 	"github.com/micro/go-micro/v2/auth"
 	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/config/cmd"
+	"github.com/micro/go-micro/v2/cmd"
 	"github.com/micro/go-micro/v2/debug/service/handler"
 	"github.com/micro/go-micro/v2/debug/stats"
 	"github.com/micro/go-micro/v2/debug/trace"
@@ -44,11 +44,16 @@ func newService(opts ...Option) Service {
 	options.Client = wrapper.CacheClient(cacheFn, options.Client)
 	options.Client = wrapper.AuthClient(authFn, options.Client)
 
+	// pass the services auth namespace to the auth handler so it
+	// uses this to verify requests, preventing the reliance on the
+	// insecure Micro-Namespace header.
+	handlerNS := wrapper.AuthHandlerNamespace(options.Auth.Options().Issuer)
+
 	// wrap the server to provide handler stats
 	options.Server.Init(
 		server.WrapHandler(wrapper.HandlerStats(stats.DefaultStats)),
 		server.WrapHandler(wrapper.TraceHandler(trace.DefaultTracer)),
-		server.WrapHandler(wrapper.AuthHandler(authFn)),
+		server.WrapHandler(wrapper.AuthHandler(authFn, handlerNS)),
 	)
 
 	// set opts
@@ -94,7 +99,7 @@ func (s *service) Init(opts ...Option) {
 			s.opts.Cmd.App().Name = s.Server().Options().Name
 		}
 
-		// Initialise the command flags, overriding new service
+		// Initialise the command options
 		if err := s.opts.Cmd.Init(
 			cmd.Auth(&s.opts.Auth),
 			cmd.Broker(&s.opts.Broker),
@@ -107,6 +112,12 @@ func (s *service) Init(opts ...Option) {
 			cmd.Store(&s.opts.Store),
 			cmd.Profile(&s.opts.Profile),
 		); err != nil {
+			logger.Fatal(err)
+		}
+
+		// execute the command
+		// TODO: do this in service.Run()
+		if err := s.opts.Cmd.Run(); err != nil {
 			logger.Fatal(err)
 		}
 

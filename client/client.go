@@ -22,11 +22,6 @@ type Client interface {
 	String() string
 }
 
-// Router manages request routing
-type Router interface {
-	SendRequest(context.Context, Request) (Response, error)
-}
-
 // Message is the interface for publishing asynchronously
 type Message interface {
 	Topic() string
@@ -62,7 +57,7 @@ type Response interface {
 	Read() ([]byte, error)
 }
 
-// Stream is the inteface for a bidirectional synchronous stream
+// Stream is the interface for a bidirectional synchronous stream
 type Stream interface {
 	// Context for the stream
 	Context() context.Context

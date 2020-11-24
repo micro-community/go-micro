@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/client/selector"
 	"github.com/micro/go-micro/v2/codec"
 	"github.com/micro/go-micro/v2/codec/bytes"
 	"github.com/micro/go-micro/v2/errors"
@@ -19,6 +18,7 @@ import (
 	"github.com/micro/go-micro/v2/metadata"
 	"github.com/micro/go-micro/v2/proxy"
 	"github.com/micro/go-micro/v2/router"
+	"github.com/micro/go-micro/v2/selector/roundrobin"
 	"github.com/micro/go-micro/v2/server"
 )
 
@@ -122,15 +122,15 @@ func (p *Proxy) filterRoutes(ctx context.Context, routes []router.Route) []route
 		// process only routes for this id
 		if id, ok := md.Get("Micro-Router"); ok && len(id) > 0 {
 			if route.Router != id {
-				// skip routes that don't mwatch
+				// skip routes that don't match
 				continue
 			}
 		}
 
 		// only process routes with this network
-		if net, ok := md.Get("Micro-Network"); ok && len(net) > 0 {
-			if route.Network != net {
-				// skip routes that don't mwatch
+		if net, ok := md.Get("Micro-Namespace"); ok && len(net) > 0 {
+			if route.Network != router.DefaultNetwork && route.Network != net {
+				// skip routes that don't match
 				continue
 			}
 		}
@@ -183,14 +183,12 @@ func (p *Proxy) getLink(r router.Route) (client.Client, error) {
 
 func (p *Proxy) getRoute(ctx context.Context, service string) ([]router.Route, error) {
 	// lookup the route cache first
-	p.Lock()
+	p.RLock()
 	cached, ok := p.Routes[service]
+	p.RUnlock()
 	if ok {
-		p.Unlock()
-		routes := toSlice(cached)
-		return p.filterRoutes(ctx, routes), nil
+		return p.filterRoutes(ctx, toSlice(cached)), nil
 	}
-	p.Unlock()
 
 	// cache routes for the service
 	routes, err := p.cacheRoutes(service)
@@ -203,7 +201,7 @@ func (p *Proxy) getRoute(ctx context.Context, service string) ([]router.Route, e
 
 func (p *Proxy) cacheRoutes(service string) ([]router.Route, error) {
 	// lookup the routes in the router
-	results, err := p.Router.Lookup(router.QueryService(service))
+	results, err := p.Router.Lookup(router.QueryService(service), router.QueryNetwork("*"))
 	if err != nil {
 		// assumption that we're ok with stale routes
 		logger.Debugf("Failed to lookup route for %s: %v", service, err)
@@ -290,6 +288,7 @@ func (p *Proxy) watchRoutes() {
 	// route watcher
 	w, err := p.Router.Watch()
 	if err != nil {
+		logger.Debugf("Error watching router: %v", err)
 		return
 	}
 	defer w.Stop()
@@ -297,6 +296,7 @@ func (p *Proxy) watchRoutes() {
 	for {
 		event, err := w.Next()
 		if err != nil {
+			logger.Debugf("Error watching router: %v", err)
 			return
 		}
 
@@ -394,7 +394,7 @@ func (p *Proxy) ServeRequest(ctx context.Context, req server.Request, rsp server
 	//nolint:prealloc
 	opts := []client.CallOption{
 		// set strategy to round robin
-		client.WithSelectOption(selector.WithStrategy(selector.RoundRobin)),
+		client.WithSelector(roundrobin.NewSelector()),
 	}
 
 	// if the address is already set just serve it

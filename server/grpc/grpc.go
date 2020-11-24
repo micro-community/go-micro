@@ -17,6 +17,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/micro/go-micro/v2/broker"
 	"github.com/micro/go-micro/v2/errors"
+	pberr "github.com/micro/go-micro/v2/errors/proto"
 	"github.com/micro/go-micro/v2/logger"
 	meta "github.com/micro/go-micro/v2/metadata"
 	"github.com/micro/go-micro/v2/registry"
@@ -118,6 +119,8 @@ func (g *grpcServer) configure(opts ...server.Option) {
 		o(&g.opts)
 	}
 
+	g.wg = wait(g.opts.Context)
+
 	maxMsgSize := g.getMaxMsgSize()
 
 	gopts := []grpc.ServerOption{
@@ -183,7 +186,17 @@ func (g *grpcServer) getListener() net.Listener {
 	return nil
 }
 
-func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) error {
+func (g *grpcServer) handler(srv interface{}, stream grpc.ServerStream) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
+				logger.Error("panic recovered: ", r)
+				logger.Error(string(debug.Stack()))
+			}
+			err = errors.InternalServerError("go.micro.server", "panic recovered: %v", r)
+		}
+	}()
+
 	if g.wg != nil {
 		g.wg.Add(1)
 		defer g.wg.Done()
@@ -367,15 +380,6 @@ func (g *grpcServer) processRequest(stream grpc.ServerStream, service *service, 
 
 		// define the handler func
 		fn := func(ctx context.Context, req server.Request, rsp interface{}) (err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-						logger.Error("panic recovered: ", r)
-						logger.Error(string(debug.Stack()))
-					}
-					err = errors.InternalServerError("go.micro.server", "panic recovered: %v", r)
-				}
-			}()
 			returnValues = function.Call([]reflect.Value{service.rcvr, mtype.prepareContext(ctx), reflect.ValueOf(argv.Interface()), reflect.ValueOf(rsp)})
 
 			// The return value for the method is an error.
@@ -397,10 +401,17 @@ func (g *grpcServer) processRequest(stream grpc.ServerStream, service *service, 
 			var errStatus *status.Status
 			switch verr := appErr.(type) {
 			case *errors.Error:
+				perr := &pberr.Error{
+					Id:     verr.Id,
+					Code:   verr.Code,
+					Detail: verr.Detail,
+					Status: verr.Status,
+				}
+
 				// micro.Error now proto based and we can attach it to grpc status
 				statusCode = microError(verr)
 				statusDesc = verr.Error()
-				errStatus, err = status.New(statusCode, statusDesc).WithDetails(verr)
+				errStatus, err = status.New(statusCode, statusDesc).WithDetails(perr)
 				if err != nil {
 					return err
 				}
@@ -469,10 +480,16 @@ func (g *grpcServer) processStream(stream grpc.ServerStream, service *service, m
 		var errStatus *status.Status
 		switch verr := appErr.(type) {
 		case *errors.Error:
+			perr := &pberr.Error{
+				Id:     verr.Id,
+				Code:   verr.Code,
+				Detail: verr.Detail,
+				Status: verr.Status,
+			}
 			// micro.Error now proto based and we can attach it to grpc status
 			statusCode = microError(verr)
 			statusDesc = verr.Error()
-			errStatus, err = status.New(statusCode, statusDesc).WithDetails(verr)
+			errStatus, err = status.New(statusCode, statusDesc).WithDetails(perr)
 			if err != nil {
 				return err
 			}
@@ -576,8 +593,12 @@ func (g *grpcServer) Register() error {
 		var regErr error
 
 		for i := 0; i < 3; i++ {
-			// set the ttl
-			rOpts := []registry.RegisterOption{registry.RegisterTTL(config.RegisterTTL)}
+			// set the ttl and namespace
+			rOpts := []registry.RegisterOption{
+				registry.RegisterTTL(config.RegisterTTL),
+				registry.RegisterDomain(g.opts.Namespace),
+			}
+
 			// attempt to register
 			if err := config.Registry.Register(service, rOpts...); err != nil {
 				// set the error
@@ -790,7 +811,9 @@ func (g *grpcServer) Deregister() error {
 	if logger.V(logger.InfoLevel, logger.DefaultLogger) {
 		logger.Infof("Deregistering node: %s", node.Id)
 	}
-	if err := config.Registry.Deregister(service); err != nil {
+
+	opt := registry.DeregisterDomain(g.opts.Namespace)
+	if err := config.Registry.Deregister(service, opt); err != nil {
 		return err
 	}
 

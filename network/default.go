@@ -14,7 +14,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/micro/go-micro/v2/client"
 	cmucp "github.com/micro/go-micro/v2/client/mucp"
-	rtr "github.com/micro/go-micro/v2/client/selector/router"
 	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/network/resolver/dns"
 	pbNet "github.com/micro/go-micro/v2/network/service/proto"
@@ -153,11 +152,7 @@ func newNetwork(opts ...Option) Network {
 	client := cmucp.NewClient(
 		client.Broker(tunBroker),
 		client.Transport(tunTransport),
-		client.Selector(
-			rtr.NewSelector(
-				rtr.WithRouter(options.Router),
-			),
-		),
+		client.Router(options.Router),
 	)
 
 	network := &network{
@@ -639,7 +634,7 @@ func (n *network) processCtrlChan(listener tunnel.Listener) {
 	// receive control message queue
 	recv := make(chan *message, 128)
 
-	// accept ControlChannel cconnections
+	// accept ControlChannel connections
 	go n.acceptCtrlConn(listener, recv)
 
 	for {
@@ -665,7 +660,7 @@ func (n *network) processCtrlChan(listener tunnel.Listener) {
 					logger.Debugf("Network received advert message from: %s", pbRtrAdvert.Id)
 				}
 
-				// loookup advertising node in our peer topology
+				// lookup advertising node in our peer topology
 				advertNode := n.node.GetPeerNode(pbRtrAdvert.Id)
 				if advertNode == nil {
 					// if we can't find the node in our topology (MaxDepth) we skipp prcessing adverts
@@ -918,7 +913,7 @@ func (n *network) processNetChan(listener tunnel.Listener) {
 					logger.Debugf("Network failed refreshing peer %s: %v", pbNetPeer.Node.Id, err)
 				}
 
-				// NOTE: we don't unpack MaxDepth toplogy
+				// NOTE: we don't unpack MaxDepth topology
 				peer = UnpackPeerTopology(pbNetPeer, now, MaxDepth-1)
 				// update the link
 				peer.link = m.msg.Header["Micro-Link"]
@@ -1222,7 +1217,7 @@ func (n *network) manage() {
 				lastSent := links[peer.link]
 
 				// check when we last sent to the peer
-				// and send a peer message if we havent
+				// and send a peer message if we haven't
 				if lastSent.IsZero() || time.Since(lastSent) > KeepAliveTime {
 					link := peer.link
 					id := peer.id
@@ -1356,7 +1351,7 @@ func (n *network) manage() {
 
 			// pick a random peer from the list of peers and request full sync
 			peer := n.node.GetPeerNode(peers[rnd.Intn(len(peers))].Id())
-			// skip if we can't find randmly selected peer
+			// skip if we can't find randomly selected peer
 			if peer == nil {
 				continue
 			}
@@ -1746,11 +1741,6 @@ func (n *network) Connect() error {
 	// create closed channel
 	n.closed = make(chan bool)
 
-	// start the router
-	if err := n.options.Router.Start(); err != nil {
-		return err
-	}
-
 	// start advertising routes
 	advertChan, err := n.options.Router.Advertise()
 	if err != nil {
@@ -1785,8 +1775,8 @@ func (n *network) close() error {
 		return err
 	}
 
-	// stop the router
-	if err := n.router.Stop(); err != nil {
+	// close the router
+	if err := n.router.Close(); err != nil {
 		return err
 	}
 

@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/micro/go-micro/v2/broker"
-	"github.com/micro/go-micro/v2/client/selector"
 	"github.com/micro/go-micro/v2/codec"
 	raw "github.com/micro/go-micro/v2/codec/bytes"
 	"github.com/micro/go-micro/v2/errors"
@@ -64,8 +63,6 @@ func (r *rpcClient) newCodec(contentType string) (codec.NewCodec, error) {
 }
 
 func (r *rpcClient) call(ctx context.Context, node *registry.Node, req Request, resp interface{}, opts CallOptions) error {
-	address := node.Address
-
 	msg := &transport.Message{
 		Header: make(map[string]string),
 	}
@@ -109,7 +106,7 @@ func (r *rpcClient) call(ctx context.Context, node *registry.Node, req Request, 
 		dOpts = append(dOpts, transport.WithTimeout(opts.DialTimeout))
 	}
 
-	c, err := r.pool.Get(address, dOpts...)
+	c, err := r.pool.Get(node.Address, dOpts...)
 	if err != nil {
 		return errors.InternalServerError("go.micro.client", "connection error: %v", err)
 	}
@@ -183,8 +180,6 @@ func (r *rpcClient) call(ctx context.Context, node *registry.Node, req Request, 
 }
 
 func (r *rpcClient) stream(ctx context.Context, node *registry.Node, req Request, opts CallOptions) (Stream, error) {
-	address := node.Address
-
 	msg := &transport.Message{
 		Header: make(map[string]string),
 	}
@@ -225,7 +220,7 @@ func (r *rpcClient) stream(ctx context.Context, node *registry.Node, req Request
 		dOpts = append(dOpts, transport.WithTimeout(opts.DialTimeout))
 	}
 
-	c, err := r.opts.Transport.Dial(address, dOpts...)
+	c, err := r.opts.Transport.Dial(node.Address, dOpts...)
 	if err != nil {
 		return nil, errors.InternalServerError("go.micro.client", "connection error: %v", err)
 	}
@@ -320,43 +315,6 @@ func (r *rpcClient) Options() Options {
 	return r.opts
 }
 
-// next returns an iterator for the next nodes to call
-func (r *rpcClient) next(request Request, opts CallOptions) (selector.Next, error) {
-	// try get the proxy
-	service, address, _ := net.Proxy(request.Service(), opts.Address)
-
-	// return remote address
-	if len(address) > 0 {
-		nodes := make([]*registry.Node, len(address))
-
-		for i, addr := range address {
-			nodes[i] = &registry.Node{
-				Address: addr,
-				// Set the protocol
-				Metadata: map[string]string{
-					"protocol": "mucp",
-				},
-			}
-		}
-
-		// crude return method
-		return func() (*registry.Node, error) {
-			return nodes[time.Now().Unix()%int64(len(nodes))], nil
-		}, nil
-	}
-
-	// get next nodes from the selector
-	next, err := r.opts.Selector.Select(service, opts.SelectOptions...)
-	if err != nil {
-		if err == selector.ErrNotFound {
-			return nil, errors.InternalServerError("go.micro.client", "service %s: %s", service, err.Error())
-		}
-		return nil, errors.InternalServerError("go.micro.client", "error selecting %s node: %s", service, err.Error())
-	}
-
-	return next, nil
-}
-
 func (r *rpcClient) Call(ctx context.Context, request Request, response interface{}, opts ...CallOption) error {
 	// make a copy of call opts
 	callOpts := r.opts.CallOptions
@@ -364,14 +322,8 @@ func (r *rpcClient) Call(ctx context.Context, request Request, response interfac
 		opt(&callOpts)
 	}
 
-	next, err := r.next(request, callOpts)
-	if err != nil {
-		return err
-	}
-
 	// check if we already have a deadline
-	d, ok := ctx.Deadline()
-	if !ok {
+	if d, ok := ctx.Deadline(); !ok {
 		// no deadline so we create a new one
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, callOpts.RequestTimeout)
@@ -379,8 +331,8 @@ func (r *rpcClient) Call(ctx context.Context, request Request, response interfac
 	} else {
 		// got a deadline so no need to setup context
 		// but we need to set the timeout we pass along
-		opt := WithRequestTimeout(d.Sub(time.Now()))
-		opt(&callOpts)
+		remaining := d.Sub(time.Now())
+		WithRequestTimeout(remaining)(&callOpts)
 	}
 
 	// should we noop right here?
@@ -411,19 +363,32 @@ func (r *rpcClient) Call(ctx context.Context, request Request, response interfac
 			time.Sleep(t)
 		}
 
-		// select next node
-		node, err := next()
-		service := request.Service()
-		if err != nil {
-			if err == selector.ErrNotFound {
-				return errors.InternalServerError("go.micro.client", "service %s: %s", service, err.Error())
-			}
-			return errors.InternalServerError("go.micro.client", "error getting next %s node: %s", service, err.Error())
+		// use the router passed as a call option, or fallback to the rpc clients router
+		if callOpts.Router == nil {
+			callOpts.Router = r.opts.Router
 		}
+		// use the selector passed as a call option, or fallback to the rpc clients selector
+		if callOpts.Selector == nil {
+			callOpts.Selector = r.opts.Selector
+		}
+
+		// lookup the route to send the request via
+		route, err := LookupRoute(request, callOpts)
+		if err != nil {
+			return err
+		}
+
+		// pass a node to enable backwards comparability as changing the
+		// call func would be a breaking change.
+		// todo v3: change the call func to accept a route
+		node := &registry.Node{Address: route.Address, Metadata: route.Metadata}
 
 		// make the call
 		err = rcall(ctx, node, request, response, callOpts)
-		r.opts.Selector.Mark(service, node, err)
+
+		// record the result of the call to inform future routing decisions
+		r.opts.Selector.Record(*route, err)
+
 		return err
 	}
 
@@ -475,11 +440,6 @@ func (r *rpcClient) Stream(ctx context.Context, request Request, opts ...CallOpt
 		opt(&callOpts)
 	}
 
-	next, err := r.next(request, callOpts)
-	if err != nil {
-		return nil, err
-	}
-
 	// should we noop right here?
 	select {
 	case <-ctx.Done():
@@ -499,17 +459,32 @@ func (r *rpcClient) Stream(ctx context.Context, request Request, opts ...CallOpt
 			time.Sleep(t)
 		}
 
-		node, err := next()
-		service := request.Service()
-		if err != nil {
-			if err == selector.ErrNotFound {
-				return nil, errors.InternalServerError("go.micro.client", "service %s: %s", service, err.Error())
-			}
-			return nil, errors.InternalServerError("go.micro.client", "error getting next %s node: %s", service, err.Error())
+		// use the router passed as a call option, or fallback to the rpc clients router
+		if callOpts.Router == nil {
+			callOpts.Router = r.opts.Router
+		}
+		// use the selector passed as a call option, or fallback to the rpc clients selector
+		if callOpts.Selector == nil {
+			callOpts.Selector = r.opts.Selector
 		}
 
+		// lookup the route to send the request via
+		route, err := LookupRoute(request, callOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		// pass a node to enable backwards compatability as changing the
+		// call func would be a breaking change.
+		// todo v3: change the call func to accept a route
+		node := &registry.Node{Address: route.Address, Metadata: route.Metadata}
+
+		// perform the call
 		stream, err := r.stream(ctx, node, request, callOpts)
-		r.opts.Selector.Mark(service, node, err)
+
+		// record the result of the call to inform future routing decisions
+		r.opts.Selector.Record(*route, err)
+
 		return stream, err
 	}
 

@@ -5,23 +5,21 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/textproto"
 	"strconv"
 	"strings"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
 	"github.com/micro/go-micro/v2/api"
 	"github.com/micro/go-micro/v2/api/handler"
+	"github.com/micro/go-micro/v2/api/handler/util"
 	"github.com/micro/go-micro/v2/api/internal/proto"
 	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/client/selector"
 	"github.com/micro/go-micro/v2/codec"
 	"github.com/micro/go-micro/v2/codec/jsonrpc"
 	"github.com/micro/go-micro/v2/codec/protorpc"
 	"github.com/micro/go-micro/v2/errors"
 	"github.com/micro/go-micro/v2/logger"
 	"github.com/micro/go-micro/v2/metadata"
-	"github.com/micro/go-micro/v2/registry"
 	"github.com/micro/go-micro/v2/util/ctx"
 	"github.com/micro/go-micro/v2/util/qson"
 	"github.com/oxtoacart/bpool"
@@ -65,14 +63,6 @@ func (b *buffer) Write(_ []byte) (int, error) {
 	return 0, nil
 }
 
-// strategy is a hack for selection
-func strategy(services []*registry.Service) selector.Strategy {
-	return func(_ []*registry.Service) selector.Next {
-		// ignore input to this function, use services above
-		return selector.Random(services)
-	}
-}
-
 func (h *rpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	bsize := handler.DefaultMaxRecvSize
 	if h.opts.MaxRecvSize > 0 {
@@ -113,36 +103,17 @@ func (h *rpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// create context
 	cx := ctx.FromRequest(r)
-	// get context from http handler wrappers
-	md, ok := metadata.FromContext(r.Context())
-	if !ok {
-		md = make(metadata.Metadata)
-	}
-	// fill contex with http headers
-	md["Host"] = r.Host
-	md["Method"] = r.Method
-	// get canonical headers
-	for k, _ := range r.Header {
-		// may be need to get all values for key like r.Header.Values() provide in go 1.14
-		md[textproto.CanonicalMIMEHeaderKey(k)] = r.Header.Get(k)
-	}
-
-	// merge context with overwrite
-	cx = metadata.MergeContext(cx, md, true)
 
 	// set merged context to request
 	*r = *r.Clone(cx)
 	// if stream we currently only support json
 	if isStream(r, service) {
-		// drop older context as it can have timeouts and create new
-		//		md, _ := metadata.FromContext(cx)
-		//serveWebsocket(context.TODO(), w, r, service, c)
 		serveWebsocket(cx, w, r, service, c)
 		return
 	}
 
-	// create strategy
-	so := selector.WithStrategy(strategy(service.Services))
+	// create custom router
+	callOpt := client.WithRouter(util.Router(service.Services))
 
 	// walk the standard call path
 	// get payload
@@ -174,7 +145,7 @@ func (h *rpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 
 		// make the call
-		if err := c.Call(cx, req, response, client.WithSelectOption(so)); err != nil {
+		if err := c.Call(cx, req, response, callOpt); err != nil {
 			writeError(w, r, err)
 			return
 		}
@@ -209,7 +180,7 @@ func (h *rpcHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			client.WithContentType(ct),
 		)
 		// make the call
-		if err := c.Call(cx, req, &response, client.WithSelectOption(so)); err != nil {
+		if err := c.Call(cx, req, &response, callOpt); err != nil {
 			writeError(w, r, err)
 			return
 		}
@@ -294,7 +265,7 @@ func requestPayload(r *http.Request) ([]byte, error) {
 
 	// otherwise as per usual
 	ctx := r.Context()
-	// dont user meadata.FromContext as it mangles names
+	// dont user metadata.FromContext as it mangles names
 	md, ok := metadata.FromContext(ctx)
 	if !ok {
 		md = make(map[string]string)

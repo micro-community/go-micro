@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/micro/go-micro/v2/auth/provider"
 	"github.com/micro/go-micro/v2/client"
 	"github.com/micro/go-micro/v2/store"
 )
@@ -22,8 +21,8 @@ func NewOptions(opts ...Option) Options {
 }
 
 type Options struct {
-	// Namespace the service belongs to
-	Namespace string
+	// Issuer of the service's account
+	Issuer string
 	// ID is the services auth ID
 	ID string
 	// Secret is used to authenticate the service
@@ -34,8 +33,6 @@ type Options struct {
 	PublicKey string
 	// PrivateKey for encoding JWTs
 	PrivateKey string
-	// Provider is an auth provider
-	Provider provider.Provider
 	// LoginURL is the relative url path where a user can login
 	LoginURL string
 	// Store to back auth
@@ -55,10 +52,10 @@ func Addrs(addrs ...string) Option {
 	}
 }
 
-// Namespace the service belongs to
-func Namespace(n string) Option {
+// Issuer of the services account
+func Issuer(i string) Option {
 	return func(o *Options) {
-		o.Namespace = n
+		o.Issuer = i
 	}
 }
 
@@ -98,13 +95,6 @@ func ClientToken(token *Token) Option {
 	}
 }
 
-// Provider set the auth provider
-func Provider(p provider.Provider) Option {
-	return func(o *Options) {
-		o.Provider = p
-	}
-}
-
 // LoginURL sets the auth LoginURL
 func LoginURL(url string) Option {
 	return func(o *Options) {
@@ -130,6 +120,8 @@ type GenerateOptions struct {
 	Type string
 	// Secret used to authenticate the account
 	Secret string
+	// Issuer of the account, e.g. micro
+	Issuer string
 }
 
 type GenerateOption func(o *GenerateOptions)
@@ -169,6 +161,13 @@ func WithScopes(s ...string) GenerateOption {
 	}
 }
 
+// WithIssuer for the generated account
+func WithIssuer(i string) GenerateOption {
+	return func(o *GenerateOptions) {
+		o.Issuer = i
+	}
+}
+
 // NewGenerateOptions from a slice of options
 func NewGenerateOptions(opts ...GenerateOption) GenerateOptions {
 	var options GenerateOptions
@@ -187,6 +186,8 @@ type TokenOptions struct {
 	RefreshToken string
 	// Expiry is the time the token should live for
 	Expiry time.Duration
+	// Issuer of the account
+	Issuer string
 }
 
 type TokenOption func(o *TokenOptions)
@@ -211,6 +212,12 @@ func WithToken(rt string) TokenOption {
 	}
 }
 
+func WithTokenIssuer(iss string) TokenOption {
+	return func(o *TokenOptions) {
+		o.Issuer = iss
+	}
+}
+
 // NewTokenOptions from a slice of options
 func NewTokenOptions(opts ...TokenOption) TokenOptions {
 	var options TokenOptions
@@ -227,7 +234,8 @@ func NewTokenOptions(opts ...TokenOption) TokenOptions {
 }
 
 type VerifyOptions struct {
-	Context context.Context
+	Context   context.Context
+	Namespace string
 }
 
 type VerifyOption func(o *VerifyOptions)
@@ -237,9 +245,15 @@ func VerifyContext(ctx context.Context) VerifyOption {
 		o.Context = ctx
 	}
 }
+func VerifyNamespace(ns string) VerifyOption {
+	return func(o *VerifyOptions) {
+		o.Namespace = ns
+	}
+}
 
 type RulesOptions struct {
-	Context context.Context
+	Context   context.Context
+	Namespace string
 }
 
 type RulesOption func(o *RulesOptions)
@@ -247,5 +261,11 @@ type RulesOption func(o *RulesOptions)
 func RulesContext(ctx context.Context) RulesOption {
 	return func(o *RulesOptions) {
 		o.Context = ctx
+	}
+}
+
+func RulesNamespace(ns string) RulesOption {
+	return func(o *RulesOptions) {
+		o.Namespace = ns
 	}
 }

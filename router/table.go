@@ -19,6 +19,8 @@ var (
 // table is an in-memory routing table
 type table struct {
 	sync.RWMutex
+	// fetchRoutes for a service
+	fetchRoutes func(string) error
 	// routes stores service routes
 	routes map[string]map[uint64]Route
 	// watchers stores table watchers
@@ -26,10 +28,11 @@ type table struct {
 }
 
 // newtable creates a new routing table and returns it
-func newTable(opts ...Option) *table {
+func newTable(fetchRoutes func(string) error, opts ...Option) *table {
 	return &table{
-		routes:   make(map[string]map[uint64]Route),
-		watchers: make(map[string]*tableWatcher),
+		fetchRoutes: fetchRoutes,
+		routes:      make(map[string]map[uint64]Route),
+		watchers:    make(map[string]*tableWatcher),
 	}
 }
 
@@ -95,6 +98,9 @@ func (t *table) Delete(r Route) error {
 	}
 
 	delete(t.routes[service], sum)
+	if len(t.routes[service]) == 0 {
+		delete(t.routes, service)
+	}
 	if logger.V(logger.DebugLevel, logger.DefaultLogger) {
 		logger.Debugf("Router emitting %s for route: %s", Delete, r.Address)
 	}
@@ -150,7 +156,7 @@ func (t *table) List() ([]Route, error) {
 func isMatch(route Route, address, gateway, network, router string, strategy Strategy) bool {
 	// matches the values provided
 	match := func(a, b string) bool {
-		if a == "*" || a == b {
+		if a == "*" || b == "*" || a == b {
 			return true
 		}
 		return false
@@ -234,9 +240,6 @@ func findRoutes(routes map[uint64]Route, address, gateway, network, router strin
 
 // Lookup queries routing table and returns all routes that match the lookup query
 func (t *table) Query(q ...QueryOption) ([]Route, error) {
-	t.RLock()
-	defer t.RUnlock()
-
 	// create new query options
 	opts := NewQuery(q...)
 
@@ -248,17 +251,44 @@ func (t *table) Query(q ...QueryOption) ([]Route, error) {
 		return results, nil
 	}
 
-	if opts.Service != "*" {
-		if _, ok := t.routes[opts.Service]; !ok {
-			return nil, ErrRouteNotFound
+	// readAndFilter routes for this service under read lock.
+	readAndFilter := func() ([]Route, bool) {
+		t.RLock()
+		defer t.RUnlock()
+
+		routes, ok := t.routes[opts.Service]
+		if !ok || len(routes) == 0 {
+			return nil, false
 		}
-		return findRoutes(t.routes[opts.Service], opts.Address, opts.Gateway, opts.Network, opts.Router, opts.Strategy), nil
+
+		return findRoutes(routes, opts.Address, opts.Gateway, opts.Network, opts.Router, opts.Strategy), true
+	}
+
+	if opts.Service != "*" {
+		// try and load services from the cache
+		if routes, ok := readAndFilter(); ok {
+			return routes, nil
+		}
+
+		// load the cache and try again
+		if err := t.fetchRoutes(opts.Service); err != nil {
+			return nil, err
+		}
+
+		// try again
+		if routes, ok := readAndFilter(); ok {
+			return routes, nil
+		}
+
+		return nil, ErrRouteNotFound
 	}
 
 	// search through all destinations
+	t.RLock()
 	for _, routes := range t.routes {
 		results = append(results, findRoutes(routes, opts.Address, opts.Gateway, opts.Network, opts.Router, opts.Strategy)...)
 	}
+	t.RUnlock()
 
 	return results, nil
 }

@@ -8,13 +8,14 @@ import (
 	"github.com/micro/go-micro/v2/auth"
 	"github.com/micro/go-micro/v2/broker"
 	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/client/selector"
+	"github.com/micro/go-micro/v2/cmd"
 	"github.com/micro/go-micro/v2/config"
-	"github.com/micro/go-micro/v2/config/cmd"
 	"github.com/micro/go-micro/v2/debug/profile"
 	"github.com/micro/go-micro/v2/debug/trace"
 	"github.com/micro/go-micro/v2/registry"
+	"github.com/micro/go-micro/v2/router"
 	"github.com/micro/go-micro/v2/runtime"
+	"github.com/micro/go-micro/v2/selector"
 	"github.com/micro/go-micro/v2/server"
 	"github.com/micro/go-micro/v2/store"
 	"github.com/micro/go-micro/v2/transport"
@@ -30,6 +31,7 @@ type Options struct {
 	Server    server.Server
 	Store     store.Store
 	Registry  registry.Registry
+	Router    router.Router
 	Runtime   runtime.Runtime
 	Transport transport.Transport
 	Profile   profile.Profile
@@ -57,6 +59,7 @@ func newOptions(opts ...Option) Options {
 		Server:    server.DefaultServer,
 		Store:     store.DefaultStore,
 		Registry:  registry.DefaultRegistry,
+		Router:    router.DefaultRouter,
 		Runtime:   runtime.DefaultRuntime,
 		Transport: transport.DefaultTransport,
 		Context:   context.Background(),
@@ -136,8 +139,9 @@ func Store(s store.Store) Option {
 func Registry(r registry.Registry) Option {
 	return func(o *Options) {
 		o.Registry = r
-		// Update Client and Server
-		o.Client.Init(client.Registry(r))
+		// Update router
+		o.Router.Init(router.Registry(r))
+		// Update server
 		o.Server.Init(server.Registry(r))
 		// Update Broker
 		o.Broker.Init(broker.Registry(r))
@@ -188,6 +192,15 @@ func Transport(t transport.Transport) Option {
 func Runtime(r runtime.Runtime) Option {
 	return func(o *Options) {
 		o.Runtime = r
+	}
+}
+
+// Router sets the router
+func Router(r router.Router) Option {
+	return func(o *Options) {
+		o.Router = r
+		// Update client
+		o.Client.Init(client.Router(r))
 	}
 }
 

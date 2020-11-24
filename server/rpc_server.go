@@ -131,8 +131,6 @@ func (s *rpcServer) HandleEvent(e broker.Event) error {
 
 // ServeConn serves a single connection
 func (s *rpcServer) ServeConn(sock transport.Socket) {
-	// global error tracking
-	var gerr error
 	// streams are multiplexed on Micro-Stream or Micro-Id header
 	pool := socket.NewPool()
 
@@ -147,11 +145,8 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 	}
 
 	defer func() {
-		// only wait if there's no error
-		if gerr == nil {
-			// wait till done
-			wg.Wait()
-		}
+		// wait till done
+		wg.Wait()
 
 		// close all the sockets for this connection
 		pool.Close()
@@ -172,10 +167,6 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 		var msg transport.Message
 		// process inbound messages one at a time
 		if err := sock.Recv(&msg); err != nil {
-			// set a global error and return
-			// we're saying we essentially can't
-			// use the socket anymore
-			gerr = err
 			return
 		}
 
@@ -193,7 +184,6 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 			if err := sock.Send(&transport.Message{
 				Header: msg.Header,
 			}); err != nil {
-				gerr = err
 				break
 			}
 			// we're done
@@ -303,14 +293,12 @@ func (s *rpcServer) ServeConn(sock transport.Socket) {
 			// try get a new codec
 			if cf, err = s.newCodec(ct); err != nil {
 				// no codec found so send back an error
-				if err := sock.Send(&transport.Message{
+				sock.Send(&transport.Message{
 					Header: map[string]string{
 						"Content-Type": "text/plain",
 					},
 					Body: []byte(err.Error()),
-				}); err != nil {
-					gerr = err
-				}
+				})
 
 				// release the socket we just created
 				pool.Release(psock)
@@ -520,7 +508,10 @@ func (s *rpcServer) Register() error {
 
 	regFunc := func(service *registry.Service) error {
 		// create registry options
-		rOpts := []registry.RegisterOption{registry.RegisterTTL(config.RegisterTTL)}
+		rOpts := []registry.RegisterOption{
+			registry.RegisterTTL(config.RegisterTTL),
+			registry.RegisterDomain(s.opts.Namespace),
+		}
 
 		var regErr error
 
@@ -766,7 +757,7 @@ func (s *rpcServer) Deregister() error {
 	if logger.V(logger.InfoLevel, logger.DefaultLogger) {
 		log.Infof("Registry [%s] Deregistering node: %s", config.Registry.String(), node.Id)
 	}
-	if err := config.Registry.Deregister(service); err != nil {
+	if err := config.Registry.Deregister(service, registry.DeregisterDomain(s.opts.Namespace)); err != nil {
 		return err
 	}
 
@@ -907,7 +898,7 @@ func (s *rpcServer) Start() error {
 				rerr := s.opts.RegisterCheck(s.opts.Context)
 				if rerr != nil && registered {
 					if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-						log.Errorf("Server %s-%s register check error: %s, deregister it", config.Name, config.Id, err)
+						log.Errorf("Server %s-%s register check error: %s, deregister it", config.Name, config.Id, rerr)
 					}
 					// deregister self in case of error
 					if err := s.Deregister(); err != nil {
@@ -917,7 +908,7 @@ func (s *rpcServer) Start() error {
 					}
 				} else if rerr != nil && !registered {
 					if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-						log.Errorf("Server %s-%s register check error: %s", config.Name, config.Id, err)
+						log.Errorf("Server %s-%s register check error: %s", config.Name, config.Id, rerr)
 					}
 					continue
 				}

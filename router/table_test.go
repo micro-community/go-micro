@@ -6,7 +6,8 @@ import (
 )
 
 func testSetup() (*table, Route) {
-	table := newTable()
+	router := newRouter().(*router)
+	table := router.table
 
 	route := Route{
 		Service: "dest.svc",
@@ -287,4 +288,61 @@ func TestQuery(t *testing.T) {
 	if len(routes) != 1 {
 		t.Errorf("incorrect number of routes returned. Expected: %d, found: %d", 1, len(routes))
 	}
+}
+
+func TestFallback(t *testing.T) {
+
+	r := &router{
+		subscribers: make(map[string]chan *Advert),
+		options:     DefaultOptions(),
+	}
+	route := Route{
+		Service: "go.micro.service.foo",
+		Router:  r.options.Id,
+		Link:    DefaultLink,
+		Metric:  DefaultLocalMetric,
+	}
+	r.table = newTable(func(s string) error {
+		r.table.Create(route)
+		return nil
+	})
+	r.start()
+
+	rts, err := r.Lookup(QueryService("go.micro.service.foo"))
+	if err != nil {
+		t.Errorf("error looking up service %s", err)
+	}
+	if len(rts) != 1 {
+		t.Errorf("incorrect number of routes returned %d", len(rts))
+	}
+
+	// deleting from the table but the next query should invoke the fallback that we passed during new table creation
+	if err := r.table.Delete(route); err != nil {
+		t.Errorf("error deleting route %s", err)
+	}
+
+	rts, err = r.Lookup(QueryService("go.micro.service.foo"))
+	if err != nil {
+		t.Errorf("error looking up service %s", err)
+	}
+	if len(rts) != 1 {
+		t.Errorf("incorrect number of routes returned %d", len(rts))
+	}
+
+}
+
+func TestFallbackError(t *testing.T) {
+	r := &router{
+		subscribers: make(map[string]chan *Advert),
+		options:     DefaultOptions(),
+	}
+	r.table = newTable(func(s string) error {
+		return fmt.Errorf("ERROR")
+	})
+	r.start()
+	_, err := r.Lookup(QueryService("go.micro.service.foo"))
+	if err == nil {
+		t.Errorf("expected error looking up service but none returned")
+	}
+
 }
