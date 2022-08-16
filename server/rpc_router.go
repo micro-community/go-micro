@@ -18,8 +18,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/micro/go-micro/v2/codec"
-	merrors "github.com/micro/go-micro/v2/errors"
+	"go-micro.dev/v4/codec"
+	merrors "go-micro.dev/v4/errors"
+	"go-micro.dev/v4/logger"
 )
 
 var (
@@ -140,7 +141,7 @@ func prepareMethod(method reflect.Method) *methodType {
 		replyType = mtype.In(3)
 		contextType = mtype.In(1)
 	default:
-		log.Errorf("method %v of %v has wrong number of ins: %v", mname, mtype, mtype.NumIn())
+		logger.Errorf("method %v of %v has wrong number of ins: %v", mname, mtype, mtype.NumIn())
 		return nil
 	}
 
@@ -148,7 +149,7 @@ func prepareMethod(method reflect.Method) *methodType {
 		// check stream type
 		streamType := reflect.TypeOf((*Stream)(nil)).Elem()
 		if !argType.Implements(streamType) {
-			log.Errorf("%v argument does not implement Stream interface: %v", mname, argType)
+			logger.Errorf("%v argument does not implement Stream interface: %v", mname, argType)
 			return nil
 		}
 	} else {
@@ -156,30 +157,30 @@ func prepareMethod(method reflect.Method) *methodType {
 
 		// First arg need not be a pointer.
 		if !isExportedOrBuiltinType(argType) {
-			log.Errorf("%v argument type not exported: %v", mname, argType)
+			logger.Errorf("%v argument type not exported: %v", mname, argType)
 			return nil
 		}
 
 		if replyType.Kind() != reflect.Ptr {
-			log.Errorf("method %v reply type not a pointer: %v", mname, replyType)
+			logger.Errorf("method %v reply type not a pointer: %v", mname, replyType)
 			return nil
 		}
 
 		// Reply type must be exported.
 		if !isExportedOrBuiltinType(replyType) {
-			log.Errorf("method %v reply type not exported: %v", mname, replyType)
+			logger.Errorf("method %v reply type not exported: %v", mname, replyType)
 			return nil
 		}
 	}
 
 	// Method needs one out.
 	if mtype.NumOut() != 1 {
-		log.Errorf("method %v has wrong number of outs: %v", mname, mtype.NumOut())
+		logger.Errorf("method %v has wrong number of outs: %v", mname, mtype.NumOut())
 		return nil
 	}
 	// The return type of the method must be error.
 	if returnType := mtype.Out(0); returnType != typeOfError {
-		log.Errorf("method %v returns %v not error", mname, returnType.String())
+		logger.Errorf("method %v returns %v not error", mname, returnType.String())
 		return nil
 	}
 	return &methodType{method: method, ArgType: argType, ReplyType: replyType, ContextType: contextType, stream: stream}
@@ -508,8 +509,8 @@ func (router *router) ProcessMessage(ctx context.Context, msg Message) (err erro
 	defer func() {
 		// recover any panics
 		if r := recover(); r != nil {
-			log.Errorf("panic recovered: %v", r)
-			log.Error(string(debug.Stack()))
+			logger.Errorf("panic recovered: %v", r)
+			logger.Error(string(debug.Stack()))
 			err = merrors.InternalServerError("go.micro.server", "panic recovered: %v", r)
 		}
 	}()
@@ -555,8 +556,14 @@ func (router *router) ProcessMessage(ctx context.Context, msg Message) (err erro
 				return err
 			}
 
+			// make request value a pointer, if it's not already
+			reqVal := req.Interface()
+			if req.CanAddr() {
+				reqVal = req.Addr().Interface()
+			}
+
 			// read the body into the handler request value
-			if err = cc.ReadBody(req.Interface()); err != nil {
+			if err = cc.ReadBody(reqVal); err != nil {
 				return err
 			}
 

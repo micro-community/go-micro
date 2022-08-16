@@ -1,9 +1,8 @@
 package handler
 
 import (
-	"github.com/micro/go-micro/v2/api/router"
-	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/client/grpc"
+	"go-micro.dev/v4/api/router"
+	"go-micro.dev/v4/client"
 )
 
 var (
@@ -27,12 +26,7 @@ func NewOptions(opts ...Option) Options {
 	}
 
 	if options.Client == nil {
-		WithClient(grpc.NewClient())(&options)
-	}
-
-	// set namespace if blank
-	if len(options.Namespace) == 0 {
-		WithNamespace("go.micro.api")(&options)
+		WithClient(client.DefaultClient)(&options)
 	}
 
 	if options.MaxRecvSize == 0 {
@@ -62,7 +56,7 @@ func WithClient(c client.Client) Option {
 	}
 }
 
-// WithMaxRecvSize specifies max body size
+// WithmaxRecvSize specifies max body size
 func WithMaxRecvSize(size int64) Option {
 	return func(o *Options) {
 		o.MaxRecvSize = size

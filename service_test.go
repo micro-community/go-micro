@@ -3,13 +3,17 @@ package micro
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 
-	"github.com/micro/go-micro/v2/client"
-	proto "github.com/micro/go-micro/v2/debug/service/proto"
-	"github.com/micro/go-micro/v2/registry/memory"
-	"github.com/micro/go-micro/v2/util/test"
+	"go-micro.dev/v4/client"
+	"go-micro.dev/v4/debug/handler"
+	proto "go-micro.dev/v4/debug/proto"
+	"go-micro.dev/v4/registry"
+	"go-micro.dev/v4/server"
+	"go-micro.dev/v4/transport"
+	"go-micro.dev/v4/util/test"
 )
 
 func testShutdown(wg *sync.WaitGroup, cancel func()) {
@@ -25,10 +29,10 @@ func testService(ctx context.Context, wg *sync.WaitGroup, name string) Service {
 	// add self
 	wg.Add(1)
 
-	r := memory.NewRegistry(memory.Services(test.Data))
+	r := registry.NewMemoryRegistry(registry.Services(test.Data))
 
 	// create service
-	return NewService(
+	srv := NewService(
 		Name(name),
 		Context(ctx),
 		Registry(r),
@@ -41,6 +45,38 @@ func testService(ctx context.Context, wg *sync.WaitGroup, name string) Service {
 			return nil
 		}),
 	)
+
+	RegisterHandler(srv.Server(), handler.NewHandler(srv.Client()))
+
+	return srv
+}
+
+func testCustomListenService(ctx context.Context, customListener net.Listener, wg *sync.WaitGroup, name string) Service {
+	// add self
+	wg.Add(1)
+
+	r := registry.NewMemoryRegistry(registry.Services(test.Data))
+
+	// create service
+	srv := NewService(
+		Name(name),
+		Context(ctx),
+		Registry(r),
+		// injection customListener
+		AddListenOption(server.ListenOption(transport.NetListener(customListener))),
+		AfterStart(func() error {
+			wg.Done()
+			return nil
+		}),
+		AfterStop(func() error {
+			wg.Done()
+			return nil
+		}),
+	)
+
+	RegisterHandler(srv.Server(), handler.NewHandler(srv.Client()))
+
+	return srv
 }
 
 func testRequest(ctx context.Context, c client.Client, name string) error {
@@ -93,6 +129,72 @@ func TestService(t *testing.T) {
 	if err := service.Run(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func benchmarkCustomListenService(b *testing.B, n int, name string) {
+
+	// create custom listen
+	customListen, err := net.Listen("tcp", server.DefaultAddress)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// stop the timer
+	b.StopTimer()
+
+	// waitgroup for server start
+	var wg sync.WaitGroup
+
+	// cancellation context
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// create test server
+	service := testCustomListenService(ctx, customListen, &wg, name)
+
+	// start the server
+	go func() {
+		if err := service.Run(); err != nil {
+			b.Fatal(err)
+		}
+	}()
+
+	// wait for service to start
+	wg.Wait()
+
+	// make a test call to warm the cache
+	for i := 0; i < 10; i++ {
+		if err := testRequest(ctx, service.Client(), name); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	// start the timer
+	b.StartTimer()
+
+	// number of iterations
+	for i := 0; i < b.N; i++ {
+		// for concurrency
+		for j := 0; j < n; j++ {
+			wg.Add(1)
+
+			go func() {
+				err := testRequest(ctx, service.Client(), name)
+				wg.Done()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}()
+		}
+
+		// wait for test completion
+		wg.Wait()
+	}
+
+	// stop the timer
+	b.StopTimer()
+
+	// shutdown service
+	testShutdown(&wg, cancel)
 }
 
 func benchmarkService(b *testing.B, n int, name string) {
@@ -172,4 +274,8 @@ func BenchmarkService32(b *testing.B) {
 
 func BenchmarkService64(b *testing.B) {
 	benchmarkService(b, 64, "test.service.64")
+}
+
+func BenchmarkCustomListenService1(b *testing.B) {
+	benchmarkCustomListenService(b, 1, "test.service.1")
 }

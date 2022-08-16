@@ -4,18 +4,17 @@ package api
 import (
 	"net/http"
 
-	goapi "github.com/micro/go-micro/v2/api"
-	"github.com/micro/go-micro/v2/api/handler"
-	"github.com/micro/go-micro/v2/api/handler/util"
-	api "github.com/micro/go-micro/v2/api/proto"
-	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/errors"
-	"github.com/micro/go-micro/v2/util/ctx"
+	"go-micro.dev/v4/api/handler"
+	api "go-micro.dev/v4/api/proto"
+	"go-micro.dev/v4/api/router"
+	"go-micro.dev/v4/client"
+	"go-micro.dev/v4/errors"
+	"go-micro.dev/v4/selector"
+	"go-micro.dev/v4/util/ctx"
 )
 
 type apiHandler struct {
 	opts handler.Options
-	s    *goapi.Service
 }
 
 const (
@@ -39,12 +38,9 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var service *goapi.Service
+	var service *router.Route
 
-	if a.s != nil {
-		// we were given the service
-		service = a.s
-	} else if a.opts.Router != nil {
+	if a.opts.Router != nil {
 		// try get service from router
 		s, err := a.opts.Router.Route(r)
 		if err != nil {
@@ -66,13 +62,15 @@ func (a *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// create request and response
 	c := a.opts.Client
-	req := c.NewRequest(service.Name, service.Endpoint.Name, request)
+	req := c.NewRequest(service.Service, service.Endpoint.Name, request)
 	rsp := &api.Response{}
 
 	// create the context from headers
 	cx := ctx.FromRequest(r)
+	// create strategy:
+	so := selector.WithStrategy(strategy(service.Versions))
 
-	if err := c.Call(cx, req, rsp, client.WithRouter(util.Router(service.Services))); err != nil {
+	if err := c.Call(cx, req, rsp, client.WithSelectOption(so)); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		ce := errors.Parse(err.Error())
 		switch ce.Code {
@@ -109,13 +107,5 @@ func NewHandler(opts ...handler.Option) handler.Handler {
 	options := handler.NewOptions(opts...)
 	return &apiHandler{
 		opts: options,
-	}
-}
-
-func WithService(s *goapi.Service, opts ...handler.Option) handler.Handler {
-	options := handler.NewOptions(opts...)
-	return &apiHandler{
-		opts: options,
-		s:    s,
 	}
 }

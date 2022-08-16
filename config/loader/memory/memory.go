@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/micro/go-micro/v2/config/loader"
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/reader/json"
-	"github.com/micro/go-micro/v2/config/source"
+	"go-micro.dev/v4/config/loader"
+	"go-micro.dev/v4/config/reader"
+	"go-micro.dev/v4/config/reader/json"
+	"go-micro.dev/v4/config/source"
 )
 
 type memory struct {
@@ -140,7 +140,9 @@ func (m *memory) reload() error {
 	}
 
 	// set values
-	m.vals, _ = m.opts.Reader.Values(set)
+	if vals, err := m.opts.Reader.Values(set); err != nil {
+		m.vals = vals
+	}
 	m.snap = &loader.Snapshot{
 		ChangeSet: set,
 		Version:   genVer(),
@@ -321,7 +323,9 @@ func (m *memory) Load(sources ...source.Source) error {
 		m.sets = append(m.sets, set)
 		idx := len(m.sets) - 1
 		m.Unlock()
-		go m.watch(idx, source)
+		if !m.opts.WithWatcherDisabled {
+			go m.watch(idx, source)
+		}
 	}
 
 	if err := m.reload(); err != nil {
@@ -336,6 +340,10 @@ func (m *memory) Load(sources ...source.Source) error {
 }
 
 func (m *memory) Watch(path ...string) (loader.Watcher, error) {
+	if m.opts.WithWatcherDisabled {
+		return nil, errors.New("watcher is disabled")
+	}
+
 	value, err := m.Get(path...)
 	if err != nil {
 		return nil, err
@@ -447,7 +455,9 @@ func NewLoader(opts ...loader.Option) loader.Loader {
 
 	for i, s := range options.Source {
 		m.sets[i] = &source.ChangeSet{Source: s.String()}
-		go m.watch(i, s)
+		if !options.WithWatcherDisabled {
+			go m.watch(i, s)
+		}
 	}
 
 	return m

@@ -10,13 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/micro/go-micro/v2/api"
-	"github.com/micro/go-micro/v2/api/router"
-	"github.com/micro/go-micro/v2/api/router/util"
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/metadata"
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/registry/cache"
+	"go-micro.dev/v4/api/router"
+	"go-micro.dev/v4/api/router/util"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/metadata"
+	"go-micro.dev/v4/registry"
+	"go-micro.dev/v4/registry/cache"
 )
 
 // endpoint struct, that holds compiled pcre
@@ -35,12 +34,12 @@ type registryRouter struct {
 	rc cache.Cache
 
 	sync.RWMutex
-	eps map[string]*api.Service
+	eps map[string]*router.Route
 	// compiled regexp for host and path
 	ceps map[string]*endpoint
 }
 
-func (r *registryRouter) isClosed() bool {
+func (r *registryRouter) isStopped() bool {
 	select {
 	case <-r.exit:
 		return true
@@ -99,7 +98,7 @@ func (r *registryRouter) process(res *registry.Result) {
 	service, err := r.rc.GetService(res.Service.Name)
 	if err != nil {
 		if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-			logger.Errorf("unable to get %v service: %v", res.Service.Name, err)
+			logger.Errorf("unable to get service: %v", err)
 		}
 		return
 	}
@@ -111,7 +110,7 @@ func (r *registryRouter) process(res *registry.Result) {
 // store local endpoint cache
 func (r *registryRouter) store(services []*registry.Service) {
 	// endpoints
-	eps := map[string]*api.Service{}
+	eps := map[string]*router.Route{}
 
 	// services
 	names := map[string]bool{}
@@ -126,10 +125,10 @@ func (r *registryRouter) store(services []*registry.Service) {
 			// create a key service:endpoint_name
 			key := fmt.Sprintf("%s.%s", service.Name, sep.Name)
 			// decode endpoint
-			end := api.Decode(sep.Metadata)
+			end := router.Decode(sep.Metadata)
 
 			// if we got nothing skip
-			if err := api.Validate(end); err != nil {
+			if err := router.Validate(end); err != nil {
 				if logger.V(logger.TraceLevel, logger.DefaultLogger) {
 					logger.Tracef("endpoint validation failed: %v", err)
 				}
@@ -139,13 +138,13 @@ func (r *registryRouter) store(services []*registry.Service) {
 			// try get endpoint
 			ep, ok := eps[key]
 			if !ok {
-				ep = &api.Service{Name: service.Name}
+				ep = &router.Route{Service: service.Name}
 			}
 
 			// overwrite the endpoint
 			ep.Endpoint = end
 			// append services
-			ep.Services = append(ep.Services, service)
+			ep.Versions = append(ep.Versions, service)
 			// store it
 			eps[key] = ep
 		}
@@ -155,9 +154,9 @@ func (r *registryRouter) store(services []*registry.Service) {
 	defer r.Unlock()
 
 	// delete any existing eps for services we know
-	for key, service := range r.eps {
+	for key, route := range r.eps {
 		// skip what we don't care about
-		if !names[service.Name] {
+		if !names[route.Service] {
 			continue
 		}
 
@@ -226,7 +225,7 @@ func (r *registryRouter) watch() {
 	var attempts int
 
 	for {
-		if r.isClosed() {
+		if r.isStopped() {
 			return
 		}
 
@@ -260,7 +259,7 @@ func (r *registryRouter) watch() {
 			res, err := w.Next()
 			if err != nil {
 				if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-					logger.Errorf("error getting next endpoint: %v", err)
+					logger.Errorf("error getting next endoint: %v", err)
 				}
 				close(ch)
 				break
@@ -274,7 +273,7 @@ func (r *registryRouter) Options() router.Options {
 	return r.opts
 }
 
-func (r *registryRouter) Close() error {
+func (r *registryRouter) Stop() error {
 	select {
 	case <-r.exit:
 		return nil
@@ -285,16 +284,16 @@ func (r *registryRouter) Close() error {
 	return nil
 }
 
-func (r *registryRouter) Register(ep *api.Endpoint) error {
+func (r *registryRouter) Register(ep *router.Route) error {
 	return nil
 }
 
-func (r *registryRouter) Deregister(ep *api.Endpoint) error {
+func (r *registryRouter) Deregister(ep *router.Route) error {
 	return nil
 }
 
-func (r *registryRouter) Endpoint(req *http.Request) (*api.Service, error) {
-	if r.isClosed() {
+func (r *registryRouter) Endpoint(req *http.Request) (*router.Route, error) {
+	if r.isStopped() {
 		return nil, errors.New("router closed")
 	}
 
@@ -374,7 +373,6 @@ func (r *registryRouter) Endpoint(req *http.Request) (*api.Service, error) {
 			for k, v := range matches {
 				md[fmt.Sprintf("x-api-field-%s", k)] = v
 			}
-			md["x-api-body"] = ep.Body
 			*req = *req.Clone(metadata.NewContext(ctx, md))
 			break
 		}
@@ -409,8 +407,8 @@ func (r *registryRouter) Endpoint(req *http.Request) (*api.Service, error) {
 	return nil, errors.New("not found")
 }
 
-func (r *registryRouter) Route(req *http.Request) (*api.Service, error) {
-	if r.isClosed() {
+func (r *registryRouter) Route(req *http.Request) (*router.Route, error) {
+	if r.isStopped() {
 		return nil, errors.New("router closed")
 	}
 
@@ -434,7 +432,7 @@ func (r *registryRouter) Route(req *http.Request) (*api.Service, error) {
 	name := rp.Name
 
 	// get service
-	services, err := r.rc.GetService(name, registry.GetDomain(rp.Domain))
+	services, err := r.rc.GetService(name)
 	if err != nil {
 		return nil, err
 	}
@@ -451,27 +449,27 @@ func (r *registryRouter) Route(req *http.Request) (*api.Service, error) {
 		}
 
 		// construct api service
-		return &api.Service{
-			Name: name,
-			Endpoint: &api.Endpoint{
+		return &router.Route{
+			Service: name,
+			Endpoint: &router.Endpoint{
 				Name:    rp.Method,
 				Handler: handler,
 			},
-			Services: services,
+			Versions: services,
 		}, nil
 	// http handler
 	case "http", "proxy", "web":
 		// construct api service
-		return &api.Service{
-			Name: name,
-			Endpoint: &api.Endpoint{
+		return &router.Route{
+			Service: name,
+			Endpoint: &router.Endpoint{
 				Name:    req.URL.String(),
 				Handler: r.opts.Handler,
 				Host:    []string{req.Host},
 				Method:  []string{req.Method},
 				Path:    []string{req.URL.Path},
 			},
-			Services: services,
+			Versions: services,
 		}, nil
 	}
 
@@ -484,7 +482,7 @@ func newRouter(opts ...router.Option) *registryRouter {
 		exit: make(chan bool),
 		opts: options,
 		rc:   cache.New(options.Registry),
-		eps:  make(map[string]*api.Service),
+		eps:  make(map[string]*router.Route),
 		ceps: make(map[string]*endpoint),
 	}
 	go r.watch()

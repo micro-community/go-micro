@@ -4,8 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/source"
+	"go-micro.dev/v4/config/source"
 )
 
 func TestValues(t *testing.T) {
@@ -33,7 +32,7 @@ func TestValues(t *testing.T) {
 	for idx, test := range testData {
 		values, err := newValues(&source.ChangeSet{
 			Data: test.csdata,
-		}, reader.Options{})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,7 +69,7 @@ func TestStructArray(t *testing.T) {
 	for idx, test := range testData {
 		values, err := newValues(&source.ChangeSet{
 			Data: test.csdata,
-		}, reader.Options{})
+		})
 		if err != nil {
 			t.Fatal(err)
 		}

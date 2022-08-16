@@ -1,41 +1,60 @@
 package selector
 
-import "github.com/micro/go-micro/v2/router"
+import (
+	"context"
 
-// Options used to configure a selector
-type Options struct{}
+	"go-micro.dev/v4/registry"
+)
 
-// Option updates the options
+type Options struct {
+	Registry registry.Registry
+	Strategy Strategy
+
+	// Other options for implementations of the interface
+	// can be stored in a context
+	Context context.Context
+}
+
+type SelectOptions struct {
+	Filters  []Filter
+	Strategy Strategy
+
+	// Other options for implementations of the interface
+	// can be stored in a context
+	Context context.Context
+}
+
+// Option used to initialise the selector
 type Option func(*Options)
 
-// Filter the routes
-type Filter func([]router.Route) []router.Route
-
-// SelectOptions used to configure selection
-type SelectOptions struct {
-	Filters []Filter
-}
-
-// SelectOption updates the select options
+// SelectOption used when making a select call
 type SelectOption func(*SelectOptions)
 
-// WithFilter adds a filter to the options
-func WithFilter(f Filter) SelectOption {
-	return func(o *SelectOptions) {
-		o.Filters = append(o.Filters, f)
+// Registry sets the registry used by the selector
+func Registry(r registry.Registry) Option {
+	return func(o *Options) {
+		o.Registry = r
 	}
 }
 
-// NewSelectOptions parses select options
-func NewSelectOptions(opts ...SelectOption) SelectOptions {
-	var options SelectOptions
-	for _, o := range opts {
-		o(&options)
+// SetStrategy sets the default strategy for the selector
+func SetStrategy(fn Strategy) Option {
+	return func(o *Options) {
+		o.Strategy = fn
 	}
+}
 
-	if options.Filters == nil {
-		options.Filters = make([]Filter, 0)
+// WithFilter adds a filter function to the list of filters
+// used during the Select call.
+func WithFilter(fn ...Filter) SelectOption {
+	return func(o *SelectOptions) {
+		o.Filters = append(o.Filters, fn...)
 	}
+}
 
-	return options
+// Strategy sets the selector strategy
+func WithStrategy(fn Strategy) SelectOption {
+	return func(o *SelectOptions) {
+		o.Strategy = fn
+	}
 }

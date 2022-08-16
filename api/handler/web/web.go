@@ -5,16 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 
-	"github.com/micro/go-micro/v2/api"
-	"github.com/micro/go-micro/v2/api/handler"
-	"github.com/micro/go-micro/v2/registry"
+	"go-micro.dev/v4/api/handler"
+	"go-micro.dev/v4/api/router"
+	"go-micro.dev/v4/selector"
 )
 
 const (
@@ -23,7 +22,6 @@ const (
 
 type webHandler struct {
 	opts handler.Options
-	s    *api.Service
 }
 
 func (wh *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -54,12 +52,9 @@ func (wh *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // getService returns the service for this request from the selector
 func (wh *webHandler) getService(r *http.Request) (string, error) {
-	var service *api.Service
+	var service *router.Route
 
-	if wh.s != nil {
-		// we were given the service
-		service = wh.s
-	} else if wh.opts.Router != nil {
+	if wh.opts.Router != nil {
 		// try get service from router
 		s, err := wh.opts.Router.Route(r)
 		if err != nil {
@@ -71,19 +66,16 @@ func (wh *webHandler) getService(r *http.Request) (string, error) {
 		return "", errors.New("no route found")
 	}
 
-	// get the nodes
-	var nodes []*registry.Node
-	for _, srv := range service.Services {
-		nodes = append(nodes, srv.Nodes...)
-	}
-	if len(nodes) == 0 {
-		return "", errors.New("no route found")
+	// create a random selector
+	next := selector.Random(service.Versions)
+
+	// get the next node
+	s, err := next()
+	if err != nil {
+		return "", nil
 	}
 
-	// select a random node
-	node := nodes[rand.Int()%len(nodes)]
-
-	return fmt.Sprintf("http://%s", node.Address), nil
+	return fmt.Sprintf("http://%s", s.Address), nil
 }
 
 // serveWebSocket used to serve a web socket proxied connection
@@ -168,14 +160,5 @@ func (wh *webHandler) String() string {
 func NewHandler(opts ...handler.Option) handler.Handler {
 	return &webHandler{
 		opts: handler.NewOptions(opts...),
-	}
-}
-
-func WithService(s *api.Service, opts ...handler.Option) handler.Handler {
-	options := handler.NewOptions(opts...)
-
-	return &webHandler{
-		opts: options,
-		s:    s,
 	}
 }

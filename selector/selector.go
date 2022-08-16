@@ -1,37 +1,43 @@
-// Package selector is for node selection and load balancing
+// Package selector is a way to pick a list of service nodes
 package selector
 
 import (
 	"errors"
 
-	"github.com/micro/go-micro/v2/router"
+	"go-micro.dev/v4/registry"
 )
 
-var (
-	// DefaultSelector is the default selector
-	DefaultSelector = NewSelector()
-
-	// ErrNoneAvailable is returned by select when no routes were provided to select from
-	ErrNoneAvailable = errors.New("none available")
-)
-
-// Selector selects a route from a pool
+// Selector builds on the registry as a mechanism to pick nodes
+// and mark their status. This allows host pools and other things
+// to be built using various algorithms.
 type Selector interface {
-	// Init a selector with options
-	Init(...Option) error
-	// Options the selector is using
+	Init(opts ...Option) error
 	Options() Options
-	// Select a route from the pool using the strategy
-	Select([]router.Route, ...SelectOption) (*router.Route, error)
-	// Record the error returned from a route to inform future selection
-	Record(router.Route, error) error
-	// Close the selector
+	// Select returns a function which should return the next node
+	Select(service string, opts ...SelectOption) (Next, error)
+	// Mark sets the success/error against a node
+	Mark(service string, node *registry.Node, err error)
+	// Reset returns state back to zero for a service
+	Reset(service string)
+	// Close renders the selector unusable
 	Close() error
-	// String returns the name of the selector
+	// Name of the selector
 	String() string
 }
 
-// NewSelector creates new selector and returns it
-func NewSelector(opts ...Option) Selector {
-	return newSelector(opts...)
-}
+// Next is a function that returns the next node
+// based on the selector's strategy
+type Next func() (*registry.Node, error)
+
+// Filter is used to filter a service during the selection process
+type Filter func([]*registry.Service) []*registry.Service
+
+// Strategy is a selection strategy e.g random, round robin
+type Strategy func([]*registry.Service) Next
+
+var (
+	DefaultSelector = NewSelector()
+
+	ErrNotFound      = errors.New("not found")
+	ErrNoneAvailable = errors.New("none available")
+)

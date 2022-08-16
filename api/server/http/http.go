@@ -9,9 +9,9 @@ import (
 	"sync"
 
 	"github.com/gorilla/handlers"
-	"github.com/micro/go-micro/v2/api/server"
-	"github.com/micro/go-micro/v2/api/server/cors"
-	"github.com/micro/go-micro/v2/logger"
+	"go-micro.dev/v4/api/server"
+	"go-micro.dev/v4/api/server/cors"
+	"go-micro.dev/v4/logger"
 )
 
 type httpServer struct {
@@ -60,7 +60,7 @@ func (s *httpServer) Handle(path string, handler http.Handler) {
 
 	// wrap with cors
 	if s.opts.EnableCORS {
-		handler = cors.CombinedCORSHandler(handler)
+		handler = cors.CombinedCORSHandler(handler, s.opts.CORSConfig)
 	}
 
 	// wrap with logger

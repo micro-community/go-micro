@@ -2,16 +2,14 @@ package wrapper
 
 import (
 	"context"
-	"reflect"
 	"strings"
 
-	"github.com/micro/go-micro/v2/auth"
-	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/debug/stats"
-	"github.com/micro/go-micro/v2/debug/trace"
-	"github.com/micro/go-micro/v2/errors"
-	"github.com/micro/go-micro/v2/metadata"
-	"github.com/micro/go-micro/v2/server"
+	"go-micro.dev/v4/auth"
+	"go-micro.dev/v4/client"
+	"go-micro.dev/v4/debug/stats"
+	"go-micro.dev/v4/debug/trace"
+	"go-micro.dev/v4/metadata"
+	"go-micro.dev/v4/server"
 )
 
 type fromServiceWrapper struct {
@@ -130,22 +128,16 @@ func TraceHandler(t trace.Tracer) server.HandlerWrapper {
 	}
 }
 
+func AuthCall(a func() auth.Auth, c client.Client) client.Client {
+	return &authWrapper{Client: c, auth: a}
+}
+
 type authWrapper struct {
 	client.Client
 	auth func() auth.Auth
 }
 
 func (a *authWrapper) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
-	ctx = a.wrapContext(ctx, opts...)
-	return a.Client.Call(ctx, req, rsp, opts...)
-}
-
-func (a *authWrapper) Stream(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
-	ctx = a.wrapContext(ctx, opts...)
-	return a.Client.Stream(ctx, req, opts...)
-}
-
-func (a *authWrapper) wrapContext(ctx context.Context, opts ...client.CallOption) context.Context {
 	// parse the options
 	var options client.CallOptions
 	for _, o := range opts {
@@ -156,198 +148,28 @@ func (a *authWrapper) wrapContext(ctx context.Context, opts ...client.CallOption
 	// We dont't override the header unless the ServiceToken option has
 	// been specified or the header wasn't provided
 	if _, ok := metadata.Get(ctx, "Authorization"); ok && !options.ServiceToken {
-		return ctx
+		return a.Client.Call(ctx, req, rsp, opts...)
 	}
 
 	// if auth is nil we won't be able to get an access token, so we execute
 	// the request without one.
 	aa := a.auth()
 	if aa == nil {
-		return ctx
+		return a.Client.Call(ctx, req, rsp, opts...)
 	}
 
 	// set the namespace header if it has not been set (e.g. on a service to service request)
 	if _, ok := metadata.Get(ctx, "Micro-Namespace"); !ok {
-		ctx = metadata.Set(ctx, "Micro-Namespace", aa.Options().Issuer)
+		ctx = metadata.Set(ctx, "Micro-Namespace", aa.Options().Namespace)
 	}
 
 	// check to see if we have a valid access token
 	aaOpts := aa.Options()
 	if aaOpts.Token != nil && !aaOpts.Token.Expired() {
 		ctx = metadata.Set(ctx, "Authorization", auth.BearerScheme+aaOpts.Token.AccessToken)
-		return ctx
+		return a.Client.Call(ctx, req, rsp, opts...)
 	}
 
 	// call without an auth token
-	return ctx
-}
-
-// AuthClient wraps requests with the auth header
-func AuthClient(auth func() auth.Auth, c client.Client) client.Client {
-	return &authWrapper{c, auth}
-}
-
-func AuthHandlerNamespace(ns string) AuthHandlerOption {
-	return func(o *AuthHandlerOptions) {
-		o.Namespace = ns
-	}
-}
-
-type AuthHandlerOption func(o *AuthHandlerOptions)
-
-type AuthHandlerOptions struct {
-	Namespace string
-}
-
-// AuthHandler wraps a server handler to perform auth
-func AuthHandler(fn func() auth.Auth, opts ...AuthHandlerOption) server.HandlerWrapper {
-	return func(h server.HandlerFunc) server.HandlerFunc {
-		return func(ctx context.Context, req server.Request, rsp interface{}) error {
-			// parse the options
-			options := AuthHandlerOptions{}
-			for _, o := range opts {
-				o(&options)
-			}
-
-			// get the auth.Auth interface
-			a := fn()
-
-			// Check for debug endpoints which should be excluded from auth
-			if strings.HasPrefix(req.Endpoint(), "Debug.") {
-				return h(ctx, req, rsp)
-			}
-
-			// Extract the token if the header is present. We will inspect the token regardless of if it's
-			// present or not since noop auth will return a blank account upon Inspecting a blank token.
-			var token string
-			if header, ok := metadata.Get(ctx, "Authorization"); ok {
-				// Ensure the correct scheme is being used
-				if !strings.HasPrefix(header, auth.BearerScheme) {
-					return errors.Unauthorized(req.Service(), "invalid authorization header. expected Bearer schema")
-				}
-
-				// Strip the bearer scheme prefix
-				token = strings.TrimPrefix(header, auth.BearerScheme)
-			}
-
-			// Inspect the token and decode an account
-			account, _ := a.Inspect(token)
-
-			// Extract the namespace header
-			ns, ok := metadata.Get(ctx, "Micro-Namespace")
-			if !ok {
-				ns = a.Options().Issuer
-				ctx = metadata.Set(ctx, "Micro-Namespace", ns)
-			}
-
-			// Check the issuer matches the services namespace. TODO: Stop allowing micro to access
-			// any namespace and instead check for the server issuer.
-			if account != nil && account.Issuer != ns && account.Issuer != "micro" {
-				return errors.Forbidden(req.Service(), "Account was issued by %v, not %v", account.Issuer, ns)
-			}
-
-			// construct the resource
-			res := &auth.Resource{
-				Type:     "service",
-				Name:     req.Service(),
-				Endpoint: req.Endpoint(),
-			}
-
-			// Normal services set the namespace to prevent it being overriden
-			// by setting the Namespace header, however this isn't the case for
-			// the proxy which uses the namespace header when routing requests
-			// to a specific network.
-			if len(options.Namespace) == 0 {
-				options.Namespace = ns
-			}
-
-			// Verify the caller has access to the resource.
-			err := a.Verify(account, res, auth.VerifyNamespace(options.Namespace))
-			if err == auth.ErrForbidden && account != nil {
-				return errors.Forbidden(req.Service(), "Forbidden call made to %v:%v by %v", req.Service(), req.Endpoint(), account.ID)
-			} else if err == auth.ErrForbidden {
-				return errors.Unauthorized(req.Service(), "Unauthorized call made to %v:%v", req.Service(), req.Endpoint())
-			} else if err != nil {
-				return errors.InternalServerError(req.Service(), "Error authorizing request: %v", err)
-			}
-
-			// There is an account, set it in the context
-			if account != nil {
-				ctx = auth.ContextWithAccount(ctx, account)
-			}
-
-			// The user is authorised, allow the call
-			return h(ctx, req, rsp)
-		}
-	}
-}
-
-type cacheWrapper struct {
-	cacheFn func() *client.Cache
-	client.Client
-}
-
-// Call executes the request. If the CacheExpiry option was set, the response will be cached using
-// a hash of the metadata and request as the key.
-func (c *cacheWrapper) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
-	// parse the options
-	var options client.CallOptions
-	for _, o := range opts {
-		o(&options)
-	}
-
-	// if the client doesn't have a cacbe setup don't continue
-	cache := c.cacheFn()
-	if cache == nil {
-		return c.Client.Call(ctx, req, rsp, opts...)
-	}
-
-	// if the cache expiry is not set, execute the call without the cache
-	if options.CacheExpiry == 0 {
-		return c.Client.Call(ctx, req, rsp, opts...)
-	}
-
-	// if the response is nil don't call the cache since we can't assign the response
-	if rsp == nil {
-		return c.Client.Call(ctx, req, rsp, opts...)
-	}
-
-	// check to see if there is a response cached, if there is assign it
-	if r, ok := cache.Get(ctx, &req); ok {
-		val := reflect.ValueOf(rsp).Elem()
-		val.Set(reflect.ValueOf(r).Elem())
-		return nil
-	}
-
-	// don't cache the result if there was an error
-	if err := c.Client.Call(ctx, req, rsp, opts...); err != nil {
-		return err
-	}
-
-	// set the result in the cache
-	cache.Set(ctx, &req, rsp, options.CacheExpiry)
-	return nil
-}
-
-// CacheClient wraps requests with the cache wrapper
-func CacheClient(cacheFn func() *client.Cache, c client.Client) client.Client {
-	return &cacheWrapper{cacheFn, c}
-}
-
-type staticClient struct {
-	address string
-	client.Client
-}
-
-func (s *staticClient) Call(ctx context.Context, req client.Request, rsp interface{}, opts ...client.CallOption) error {
-	return s.Client.Call(ctx, req, rsp, append(opts, client.WithAddress(s.address))...)
-}
-
-func (s *staticClient) Stream(ctx context.Context, req client.Request, opts ...client.CallOption) (client.Stream, error) {
-	return s.Client.Stream(ctx, req, append(opts, client.WithAddress(s.address))...)
-}
-
-// StaticClient sets an address on every call
-func StaticClient(address string, c client.Client) client.Client {
-	return &staticClient{address, c}
+	return a.Client.Call(ctx, req, rsp, opts...)
 }

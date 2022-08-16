@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/micro/go-micro/v2/errors"
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/registry/memory"
+	"go-micro.dev/v4/errors"
+	"go-micro.dev/v4/registry"
+	"go-micro.dev/v4/selector"
 )
 
 func newTestRegistry() registry.Registry {
-	return memory.NewRegistry(memory.Services(testData))
+	return registry.NewMemoryRegistry(registry.Services(testData))
 }
 
 func TestCallAddress(t *testing.T) {
@@ -46,6 +46,7 @@ func TestCallAddress(t *testing.T) {
 		Registry(r),
 		WrapCall(wrap),
 	)
+	c.Options().Selector.Init(selector.Registry(r))
 
 	req := c.NewRequest(service, endpoint, nil)
 
@@ -84,6 +85,7 @@ func TestCallRetry(t *testing.T) {
 		Registry(r),
 		WrapCall(wrap),
 	)
+	c.Options().Selector.Init(selector.Registry(r))
 
 	req := c.NewRequest(service, endpoint, nil)
 
@@ -131,6 +133,7 @@ func TestCallWrapper(t *testing.T) {
 		Registry(r),
 		WrapCall(wrap),
 	)
+	c.Options().Selector.Init(selector.Registry(r))
 
 	r.Register(&registry.Service{
 		Name:    service,

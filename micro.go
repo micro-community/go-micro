@@ -4,8 +4,8 @@ package micro
 import (
 	"context"
 
-	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/server"
+	"go-micro.dev/v4/client"
+	"go-micro.dev/v4/server"
 )
 
 type serviceKey struct{}
@@ -30,38 +30,6 @@ type Service interface {
 	String() string
 }
 
-// Function is a one time executing Service
-type Function interface {
-	// Inherits Service interface
-	Service
-	// Done signals to complete execution
-	Done() error
-	// Handle registers an RPC handler
-	Handle(v interface{}) error
-	// Subscribe registers a subscriber
-	Subscribe(topic string, v interface{}) error
-}
-
-/*
-// Type Event is a future type for acting on asynchronous events
-type Event interface {
-	// Publish publishes a message to the event topic
-	Publish(ctx context.Context, msg interface{}, opts ...client.PublishOption) error
-	// Subscribe to the event
-	Subscribe(ctx context.Context, v in
-}
-
-// Resource is a future type for defining dependencies
-type Resource interface {
-	// Name of the resource
-	Name() string
-	// Type of resource
-	Type() string
-	// Method of creation
-	Create() error
-}
-*/
-
 // Event is used to publish messages to a topic
 type Event interface {
 	// Publish publishes a message to the event topic
@@ -72,10 +40,6 @@ type Event interface {
 type Publisher = Event
 
 type Option func(*Options)
-
-var (
-	HeaderPrefix = "Micro-"
-)
 
 // NewService creates and returns a new Service based on the packages within.
 func NewService(opts ...Option) Service {
@@ -93,22 +57,12 @@ func NewContext(ctx context.Context, s Service) context.Context {
 	return context.WithValue(ctx, serviceKey{}, s)
 }
 
-// NewFunction returns a new Function for a one time executing Service
-func NewFunction(opts ...Option) Function {
-	return newFunction(opts...)
-}
-
 // NewEvent creates a new event publisher
 func NewEvent(topic string, c client.Client) Event {
 	if c == nil {
 		c = client.NewClient()
 	}
 	return &event{c, topic}
-}
-
-// Deprecated: NewPublisher returns a new Publisher
-func NewPublisher(topic string, c client.Client) Event {
-	return NewEvent(topic, c)
 }
 
 // RegisterHandler is syntactic sugar for registering a handler

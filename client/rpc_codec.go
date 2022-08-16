@@ -4,16 +4,16 @@ import (
 	"bytes"
 	errs "errors"
 
-	"github.com/micro/go-micro/v2/codec"
-	raw "github.com/micro/go-micro/v2/codec/bytes"
-	"github.com/micro/go-micro/v2/codec/grpc"
-	"github.com/micro/go-micro/v2/codec/json"
-	"github.com/micro/go-micro/v2/codec/jsonrpc"
-	"github.com/micro/go-micro/v2/codec/proto"
-	"github.com/micro/go-micro/v2/codec/protorpc"
-	"github.com/micro/go-micro/v2/errors"
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/transport"
+	"go-micro.dev/v4/codec"
+	raw "go-micro.dev/v4/codec/bytes"
+	"go-micro.dev/v4/codec/grpc"
+	"go-micro.dev/v4/codec/json"
+	"go-micro.dev/v4/codec/jsonrpc"
+	"go-micro.dev/v4/codec/proto"
+	"go-micro.dev/v4/codec/protorpc"
+	"go-micro.dev/v4/errors"
+	"go-micro.dev/v4/registry"
+	"go-micro.dev/v4/transport"
 )
 
 const (
@@ -50,7 +50,7 @@ type readWriteCloser struct {
 }
 
 var (
-	DefaultContentType = "application/protobuf"
+	DefaultContentType = "application/json"
 
 	DefaultCodecs = map[string]codec.NewCodec{
 		"application/grpc":         grpc.NewCodec,
@@ -129,8 +129,10 @@ func setHeaders(m *codec.Message, stream string) {
 
 // setupProtocol sets up the old protocol
 func setupProtocol(msg *transport.Message, node *registry.Node) codec.NewCodec {
-	// get the protocol from node metadata
-	if protocol := node.Metadata["protocol"]; len(protocol) > 0 {
+	protocol := node.Metadata["protocol"]
+
+	// got protocol
+	if len(protocol) > 0 {
 		return nil
 	}
 

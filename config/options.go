@@ -1,9 +1,9 @@
 package config
 
 import (
-	"github.com/micro/go-micro/v2/config/loader"
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/source"
+	"go-micro.dev/v4/config/loader"
+	"go-micro.dev/v4/config/reader"
+	"go-micro.dev/v4/config/source"
 )
 
 // WithLoader sets the loader for manager config
@@ -24,5 +24,11 @@ func WithSource(s source.Source) Option {
 func WithReader(r reader.Reader) Option {
 	return func(o *Options) {
 		o.Reader = r
+	}
+}
+
+func WithWatcherDisabled() Option {
+	return func(o *Options) {
+		o.WithWatcherDisabled = true
 	}
 }

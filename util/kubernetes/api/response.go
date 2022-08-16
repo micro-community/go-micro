@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 )
 
@@ -59,7 +59,10 @@ func (r *Response) Into(data interface{}) error {
 }
 
 func (r *Response) Close() error {
-	return r.res.Body.Close()
+	if r.res != nil {
+		return r.res.Body.Close()
+	}
+	return nil
 }
 
 func newResponse(res *http.Response, err error) *Response {
@@ -84,7 +87,7 @@ func newResponse(res *http.Response, err error) *Response {
 		return r
 	}
 
-	b, err := ioutil.ReadAll(r.res.Body)
+	b, err := io.ReadAll(r.res.Body)
 	if err == nil {
 		r.err = errors.New(string(b))
 		return r

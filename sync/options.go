@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"context"
+	"crypto/tls"
 	"time"
 )
 
@@ -29,5 +31,19 @@ func LockTTL(t time.Duration) LockOption {
 func LockWait(t time.Duration) LockOption {
 	return func(o *LockOptions) {
 		o.Wait = t
+	}
+}
+
+// WithTLS sets the TLS config
+func WithTLS(t *tls.Config) Option {
+	return func(o *Options) {
+		o.TLSConfig = t
+	}
+}
+
+// WithContext sets the syncs context, for any extra configuration
+func WithContext(c context.Context) Option {
+	return func(o *Options) {
+		o.Context = c
 	}
 }

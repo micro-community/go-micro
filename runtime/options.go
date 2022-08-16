@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/micro/go-micro/v2/client"
+	"go-micro.dev/v4/client"
 )
 
 type Option func(o *Options)
@@ -82,8 +82,6 @@ type CreateOptions struct {
 	Namespace string
 	// Specify the context to use
 	Context context.Context
-	// Credentials for the service to use
-	Credentials string
 }
 
 // ReadOptions queries runtime services
@@ -125,13 +123,6 @@ func CreateNamespace(ns string) CreateOption {
 func CreateContext(ctx context.Context) CreateOption {
 	return func(o *CreateOptions) {
 		o.Context = ctx
-	}
-}
-
-// CreateCredentials sets the credentials to start the service with
-func CreateCredentials(user, pass string) CreateOption {
-	return func(o *CreateOptions) {
-		o.Credentials = user + ":" + pass
 	}
 }
 

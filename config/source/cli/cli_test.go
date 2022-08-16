@@ -5,11 +5,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/micro/cli/v2"
-	"github.com/micro/go-micro/v2"
-	"github.com/micro/go-micro/v2/cmd"
-	"github.com/micro/go-micro/v2/config"
-	"github.com/micro/go-micro/v2/config/source"
+	"github.com/urfave/cli/v2"
+	"go-micro.dev/v4"
+	"go-micro.dev/v4/config"
+	"go-micro.dev/v4/config/source"
+	"go-micro.dev/v4/util/cmd"
 )
 
 func TestCliSourceDefault(t *testing.T) {
@@ -29,6 +29,9 @@ func TestCliSourceDefault(t *testing.T) {
 			},
 			&cli.StringFlag{
 				Name: "test.testlogfile",
+			},
+			&cli.StringFlag{
+				Name: "test.paniconexit0",
 			},
 			&cli.StringFlag{
 				Name:    "flag",

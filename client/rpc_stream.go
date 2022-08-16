@@ -2,10 +2,11 @@ package client
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 
-	"github.com/micro/go-micro/v2/codec"
+	"go-micro.dev/v4/codec"
 )
 
 // Implements the streamer interface
@@ -74,10 +75,10 @@ func (r *rpcStream) Send(msg interface{}) error {
 
 func (r *rpcStream) Recv(msg interface{}) error {
 	r.Lock()
-	defer r.Unlock()
 
 	if r.isClosed() {
 		r.err = errShutdown
+		r.Unlock()
 		return errShutdown
 	}
 
@@ -89,9 +90,12 @@ func (r *rpcStream) Recv(msg interface{}) error {
 	if err != nil {
 		if err == io.EOF && !r.isClosed() {
 			r.err = io.ErrUnexpectedEOF
+			r.Unlock()
 			return io.ErrUnexpectedEOF
 		}
 		r.err = err
+
+		r.Unlock()
 		return err
 	}
 
@@ -120,6 +124,7 @@ func (r *rpcStream) Recv(msg interface{}) error {
 		}
 	}
 
+	r.Unlock()
 	return r.err
 }
 
@@ -127,6 +132,10 @@ func (r *rpcStream) Error() error {
 	r.RLock()
 	defer r.RUnlock()
 	return r.err
+}
+
+func (r *rpcStream) CloseSend() error {
+	return errors.New("streamer not implemented")
 }
 
 func (r *rpcStream) Close() error {

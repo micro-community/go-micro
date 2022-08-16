@@ -1,22 +1,20 @@
 package http
 
 import (
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"testing"
 
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/registry/memory"
-	"github.com/micro/go-micro/v2/router"
-	regRouter "github.com/micro/go-micro/v2/router/registry"
+	"go-micro.dev/v4/registry"
 )
 
 func TestRoundTripper(t *testing.T) {
-	m := memory.NewRegistry()
-	r := regRouter.NewRouter(router.Registry(m))
+	m := registry.NewMemoryRegistry()
 
-	rt := NewRoundTripper(WithRouter(r))
+	rt := NewRoundTripper(
+		WithRegistry(m),
+	)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`hello world`))
@@ -50,7 +48,7 @@ func TestRoundTripper(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := ioutil.ReadAll(w.Body)
+	b, err := io.ReadAll(w.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +68,7 @@ func TestRoundTripper(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err = ioutil.ReadAll(rsp.Body)
+	b, err = io.ReadAll(rsp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}

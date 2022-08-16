@@ -4,13 +4,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/micro/go-micro/v2/transport"
-	"github.com/micro/go-micro/v2/transport/memory"
+	"go-micro.dev/v4/transport"
 )
 
 func testPool(t *testing.T, size int, ttl time.Duration) {
 	// mock transport
-	tr := memory.NewTransport()
+	tr := transport.NewMemoryTransport()
 
 	options := Options{
 		TTL:       ttl,

@@ -4,8 +4,8 @@ package loader
 import (
 	"context"
 
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/source"
+	"go-micro.dev/v4/config/reader"
+	"go-micro.dev/v4/config/source"
 )
 
 // Loader manages loading sources
@@ -48,6 +48,8 @@ type Options struct {
 
 	// for alternative data
 	Context context.Context
+
+	WithWatcherDisabled bool
 }
 
 type Option func(o *Options)

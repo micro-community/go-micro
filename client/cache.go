@@ -7,8 +7,8 @@ import (
 	"hash/fnv"
 	"time"
 
-	"github.com/micro/go-micro/v2/metadata"
 	cache "github.com/patrickmn/go-cache"
+	"go-micro.dev/v4/metadata"
 )
 
 // NewCache returns an initialised cache.

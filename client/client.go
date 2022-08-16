@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/micro/go-micro/v2/codec"
+	"go-micro.dev/v4/codec"
 )
 
 // Client is the interface used to make requests to services.
@@ -20,6 +20,11 @@ type Client interface {
 	Stream(ctx context.Context, req Request, opts ...CallOption) (Stream, error)
 	Publish(ctx context.Context, msg Message, opts ...PublishOption) error
 	String() string
+}
+
+// Router manages request routing
+type Router interface {
+	SendRequest(context.Context, Request) (Response, error)
 }
 
 // Message is the interface for publishing asynchronously
@@ -57,8 +62,9 @@ type Response interface {
 	Read() ([]byte, error)
 }
 
-// Stream is the interface for a bidirectional synchronous stream
+// Stream is the inteface for a bidirectional synchronous stream
 type Stream interface {
+	Closer
 	// Context for the stream
 	Context() context.Context
 	// The request made
@@ -73,6 +79,12 @@ type Stream interface {
 	Error() error
 	// Close closes the stream
 	Close() error
+}
+
+// Closer handle client close
+type Closer interface {
+	// CloseSend closes the send direction of the stream.
+	CloseSend() error
 }
 
 // Option used by the Client

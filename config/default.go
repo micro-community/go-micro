@@ -5,11 +5,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/micro/go-micro/v2/config/loader"
-	"github.com/micro/go-micro/v2/config/loader/memory"
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/reader/json"
-	"github.com/micro/go-micro/v2/config/source"
+	"go-micro.dev/v4/config/loader"
+	"go-micro.dev/v4/config/loader/memory"
+	"go-micro.dev/v4/config/reader"
+	"go-micro.dev/v4/config/reader/json"
+	"go-micro.dev/v4/config/source"
 )
 
 type config struct {
@@ -33,8 +33,13 @@ type watcher struct {
 func newConfig(opts ...Option) (Config, error) {
 	var c config
 
-	c.Init(opts...)
-	go c.run()
+	err := c.Init(opts...)
+	if err != nil {
+		return nil, err
+	}
+	if !c.opts.WithWatcherDisabled {
+		go c.run()
+	}
 
 	return &c, nil
 }
@@ -50,7 +55,12 @@ func (c *config) Init(opts ...Option) error {
 
 	// default loader uses the configured reader
 	if c.opts.Loader == nil {
-		c.opts.Loader = memory.NewLoader(memory.WithReader(c.opts.Reader))
+		loaderOpts := []loader.Option{memory.WithReader(c.opts.Reader)}
+		if c.opts.WithWatcherDisabled {
+			loaderOpts = append(loaderOpts, memory.WithWatcherDisabled())
+		}
+
+		c.opts.Loader = memory.NewLoader(loaderOpts...)
 	}
 
 	err := c.opts.Loader.Load(c.opts.Source...)
@@ -86,7 +96,7 @@ func (c *config) run() {
 
 			c.Lock()
 
-			if c.snap != nil && c.snap.Version >= snap.Version {
+			if c.snap.Version >= snap.Version {
 				c.Unlock()
 				continue
 			}

@@ -3,7 +3,7 @@ package web
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,8 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/registry/memory"
+	"go-micro.dev/v4/registry"
 )
 
 func TestService(t *testing.T) {
@@ -23,7 +22,7 @@ func TestService(t *testing.T) {
 		afterStopCalled   bool
 		str               = `<html><body><h1>Hello World</h1></body></html>`
 		fn                = func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, str) }
-		reg               = memory.NewRegistry()
+		reg               = registry.NewMemoryRegistry()
 	)
 
 	beforeStart := func() error {
@@ -81,7 +80,7 @@ func TestService(t *testing.T) {
 	}
 	defer rsp.Body.Close()
 
-	b, err := ioutil.ReadAll(rsp.Body)
+	b, err := io.ReadAll(rsp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +164,7 @@ func TestOptions(t *testing.T) {
 		version          = "service-version"
 		address          = "service-addr:8080"
 		advertise        = "service-adv:8080"
-		reg              = memory.NewRegistry()
+		reg              = registry.NewMemoryRegistry()
 		registerTTL      = 123 * time.Second
 		registerInterval = 456 * time.Second
 		handler          = http.NewServeMux()
@@ -238,7 +237,7 @@ func TestTLS(t *testing.T) {
 		str    = `<html><body><h1>Hello World</h1></body></html>`
 		fn     = func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, str) }
 		secure = true
-		reg    = memory.NewRegistry()
+		reg    = registry.NewMemoryRegistry()
 	)
 
 	service := NewService(
@@ -277,7 +276,7 @@ func TestTLS(t *testing.T) {
 	}
 	defer rsp.Body.Close()
 
-	b, err := ioutil.ReadAll(rsp.Body)
+	b, err := io.ReadAll(rsp.Body)
 	if err != nil {
 		t.Fatal(err)
 	}

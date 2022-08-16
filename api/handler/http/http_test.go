@@ -6,17 +6,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/micro/go-micro/v2/api/handler"
-	"github.com/micro/go-micro/v2/api/resolver"
-	"github.com/micro/go-micro/v2/api/resolver/vpath"
-	"github.com/micro/go-micro/v2/api/router"
-	regRouter "github.com/micro/go-micro/v2/api/router/registry"
-	"github.com/micro/go-micro/v2/registry"
-	"github.com/micro/go-micro/v2/registry/memory"
+	"go-micro.dev/v4/api/handler"
+	"go-micro.dev/v4/api/resolver"
+	"go-micro.dev/v4/api/resolver/vpath"
+	"go-micro.dev/v4/api/router"
+	regRouter "go-micro.dev/v4/api/router/registry"
+	"go-micro.dev/v4/registry"
 )
 
 func testHttp(t *testing.T, path, service, ns string) {
-	r := memory.NewRegistry()
+	r := registry.NewMemoryRegistry()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -58,7 +57,7 @@ func testHttp(t *testing.T, path, service, ns string) {
 		router.WithHandler("http"),
 		router.WithRegistry(r),
 		router.WithResolver(vpath.NewResolver(
-			resolver.WithServicePrefix(ns),
+			resolver.WithNamespace(resolver.StaticNamespace(ns)),
 		)),
 	)
 

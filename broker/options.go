@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 
-	"github.com/micro/go-micro/v2/codec"
-	"github.com/micro/go-micro/v2/registry"
+	"go-micro.dev/v4/codec"
+	"go-micro.dev/v4/registry"
 )
 
 type Options struct {
@@ -13,7 +13,7 @@ type Options struct {
 	Secure bool
 	Codec  codec.Marshaler
 
-	// Handler executed when error happens in broker message
+	// Handler executed when error happens in broker mesage
 	// processing
 	ErrorHandler Handler
 

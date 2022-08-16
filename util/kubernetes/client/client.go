@@ -6,15 +6,14 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
 	"regexp"
 	"strings"
 
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/util/kubernetes/api"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/util/kubernetes/api"
 )
 
 var (
@@ -37,7 +36,7 @@ type client struct {
 type Client interface {
 	// Create creates new API resource
 	Create(*Resource, ...CreateOption) error
-	// Get queries API resources
+	// Get queries API resrouces
 	Get(*Resource, ...GetOption) error
 	// Update patches existing API object
 	Update(*Resource, ...UpdateOption) error
@@ -64,15 +63,15 @@ func (c *client) Create(r *Resource, opts ...CreateOption) error {
 	if err := renderTemplate(r.Kind, b, r.Value); err != nil {
 		return err
 	}
-
-	return api.NewRequest(c.opts).
+	resp := api.NewRequest(c.opts).
 		Post().
 		SetHeader("Content-Type", "application/yaml").
 		Namespace(options.Namespace).
 		Resource(r.Kind).
 		Body(b).
-		Do().
-		Error()
+		Do()
+	resp.Close()
+	return resp.Error()
 }
 
 var (
@@ -160,8 +159,9 @@ func (c *client) Update(r *Resource, opts ...UpdateOption) error {
 	default:
 		return errors.New("unsupported resource")
 	}
-
-	return req.Do().Error()
+	resp := req.Do()
+	resp.Close()
+	return resp.Error()
 }
 
 // Delete removes API object
@@ -172,14 +172,14 @@ func (c *client) Delete(r *Resource, opts ...DeleteOption) error {
 	for _, o := range opts {
 		o(&options)
 	}
-
-	return api.NewRequest(c.opts).
+	resp := api.NewRequest(c.opts).
 		Delete().
 		Resource(r.Kind).
 		Name(r.Name).
 		Namespace(options.Namespace).
-		Do().
-		Error()
+		Do()
+	resp.Close()
+	return resp.Error()
 }
 
 // List lists API objects and stores the result in r
@@ -312,11 +312,12 @@ func NewDeployment(name, version, typ, namespace string) *Deployment {
 		Template: &Template{
 			Metadata: Metadata,
 			PodSpec: &PodSpec{
+				ServiceAccountName: namespace,
 				Containers: []Container{{
 					Name:    name,
 					Image:   DefaultImage,
 					Env:     []EnvVar{env},
-					Command: []string{},
+					Command: []string{"go", "run", "."},
 					Ports: []ContainerPort{{
 						Name:          "service-port",
 						ContainerPort: 8080,
@@ -358,7 +359,7 @@ func NewClusterClient() *client {
 		logger.Fatal(errors.New("service account not found"))
 	}
 
-	token, err := ioutil.ReadFile(path.Join(serviceAccountPath, "token"))
+	token, err := os.ReadFile(path.Join(serviceAccountPath, "token"))
 	if err != nil {
 		logger.Fatal(err)
 	}

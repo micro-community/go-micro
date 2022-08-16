@@ -6,17 +6,12 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/micro/go-micro/v2/api/resolver"
+	"go-micro.dev/v4/api/resolver"
 )
 
-type Resolver struct {
-	opts resolver.Options
-}
+type Resolver struct{}
 
-func (r *Resolver) Resolve(req *http.Request, opts ...resolver.ResolveOption) (*resolver.Endpoint, error) {
-	// parse options
-	options := resolver.NewResolveOptions(opts...)
-
+func (r *Resolver) Resolve(req *http.Request) (*resolver.Endpoint, error) {
 	// /foo.Bar/Service
 	if req.URL.Path == "/" {
 		return nil, errors.New("unknown name")
@@ -31,7 +26,6 @@ func (r *Resolver) Resolve(req *http.Request, opts ...resolver.ResolveOption) (*
 		Host:   req.Host,
 		Method: req.Method,
 		Path:   req.URL.Path,
-		Domain: options.Domain,
 	}, nil
 }
 
@@ -40,5 +34,5 @@ func (r *Resolver) String() string {
 }
 
 func NewResolver(opts ...resolver.Option) resolver.Resolver {
-	return &Resolver{opts: resolver.NewOptions(opts...)}
+	return &Resolver{}
 }

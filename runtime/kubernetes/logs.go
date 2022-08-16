@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/micro/go-micro/v2/runtime"
-	"github.com/micro/go-micro/v2/util/kubernetes/client"
-	"github.com/micro/go-micro/v2/util/log"
+	"go-micro.dev/v4/runtime"
+	"go-micro.dev/v4/util/kubernetes/client"
+	"go-micro.dev/v4/util/log"
 )
 
 type klog struct {
@@ -53,11 +53,7 @@ func (k *klog) podLogStream(podName string, stream *kubeStream) error {
 				record := runtime.LogRecord{
 					Message: s.Text(),
 				}
-				select {
-				case stream.stream <- record:
-				case <-stream.stop:
-					return stream.Error()
-				}
+				stream.stream <- record
 			} else {
 				// TODO: is there a blocking call
 				// rather than a sleep loop?
@@ -119,7 +115,7 @@ func (k *klog) Read() ([]runtime.LogRecord, error) {
 			logParams["tailLines"] = strconv.Itoa(int(k.options.Count))
 		}
 
-		if k.options.Stream == true {
+		if k.options.Stream {
 			logParams["follow"] = "true"
 		}
 

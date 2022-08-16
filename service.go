@@ -4,21 +4,14 @@ import (
 	"os"
 	"os/signal"
 	rtime "runtime"
-	"strings"
 	"sync"
 
-	"github.com/micro/go-micro/v2/auth"
-	"github.com/micro/go-micro/v2/client"
-	"github.com/micro/go-micro/v2/cmd"
-	"github.com/micro/go-micro/v2/debug/service/handler"
-	"github.com/micro/go-micro/v2/debug/stats"
-	"github.com/micro/go-micro/v2/debug/trace"
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/plugin"
-	"github.com/micro/go-micro/v2/server"
-	"github.com/micro/go-micro/v2/store"
-	signalutil "github.com/micro/go-micro/v2/util/signal"
-	"github.com/micro/go-micro/v2/util/wrapper"
+	"go-micro.dev/v4/client"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/server"
+	"go-micro.dev/v4/store"
+	"go-micro.dev/v4/util/cmd"
+	signalutil "go-micro.dev/v4/util/signal"
 )
 
 type service struct {
@@ -28,38 +21,9 @@ type service struct {
 }
 
 func newService(opts ...Option) Service {
-	service := new(service)
-	options := newOptions(opts...)
-
-	// service name
-	serviceName := options.Server.Options().Name
-
-	// we pass functions to the wrappers since the values can change during initialisation
-	authFn := func() auth.Auth { return options.Server.Options().Auth }
-	cacheFn := func() *client.Cache { return options.Client.Options().Cache }
-
-	// wrap client to inject From-Service header on any calls
-	options.Client = wrapper.FromService(serviceName, options.Client)
-	options.Client = wrapper.TraceCall(serviceName, trace.DefaultTracer, options.Client)
-	options.Client = wrapper.CacheClient(cacheFn, options.Client)
-	options.Client = wrapper.AuthClient(authFn, options.Client)
-
-	// pass the services auth namespace to the auth handler so it
-	// uses this to verify requests, preventing the reliance on the
-	// insecure Micro-Namespace header.
-	handlerNS := wrapper.AuthHandlerNamespace(options.Auth.Options().Issuer)
-
-	// wrap the server to provide handler stats
-	options.Server.Init(
-		server.WrapHandler(wrapper.HandlerStats(stats.DefaultStats)),
-		server.WrapHandler(wrapper.TraceHandler(trace.DefaultTracer)),
-		server.WrapHandler(wrapper.AuthHandler(authFn, handlerNS)),
-	)
-
-	// set opts
-	service.opts = options
-
-	return service
+	return &service{
+		opts: newOptions(opts...),
+	}
 }
 
 func (s *service) Name() string {
@@ -76,30 +40,12 @@ func (s *service) Init(opts ...Option) {
 	}
 
 	s.once.Do(func() {
-		// setup the plugins
-		for _, p := range strings.Split(os.Getenv("MICRO_PLUGIN"), ",") {
-			if len(p) == 0 {
-				continue
-			}
-
-			// load the plugin
-			c, err := plugin.Load(p)
-			if err != nil {
-				logger.Fatal(err)
-			}
-
-			// initialise the plugin
-			if err := plugin.Init(c); err != nil {
-				logger.Fatal(err)
-			}
-		}
-
 		// set cmd name
 		if len(s.opts.Cmd.App().Name) == 0 {
 			s.opts.Cmd.App().Name = s.Server().Options().Name
 		}
 
-		// Initialise the command options
+		// Initialise the command flags, overriding new service
 		if err := s.opts.Cmd.Init(
 			cmd.Auth(&s.opts.Auth),
 			cmd.Broker(&s.opts.Broker),
@@ -115,15 +61,12 @@ func (s *service) Init(opts ...Option) {
 			logger.Fatal(err)
 		}
 
-		// execute the command
-		// TODO: do this in service.Run()
-		if err := s.opts.Cmd.Run(); err != nil {
-			logger.Fatal(err)
-		}
-
 		// Explicitly set the table name to the service name
 		name := s.opts.Cmd.App().Name
-		s.opts.Store.Init(store.Table(name))
+		err := s.opts.Store.Init(store.Table(name))
+		if err != nil {
+			logger.Fatal(err)
+		}
 	})
 }
 
@@ -164,35 +107,30 @@ func (s *service) Start() error {
 }
 
 func (s *service) Stop() error {
-	var gerr error
+	var err error
 
 	for _, fn := range s.opts.BeforeStop {
-		if err := fn(); err != nil {
-			gerr = err
-		}
+		err = fn()
 	}
 
-	if err := s.opts.Server.Stop(); err != nil {
+	if err = s.opts.Server.Stop(); err != nil {
 		return err
 	}
 
 	for _, fn := range s.opts.AfterStop {
-		if err := fn(); err != nil {
-			gerr = err
-		}
+		err = fn()
 	}
 
-	return gerr
+	return err
 }
 
-func (s *service) Run() error {
-	// register the debug handler
-	s.opts.Server.Handle(
-		s.opts.Server.NewHandler(
-			handler.NewHandler(s.opts.Client),
-			server.InternalHandler(true),
-		),
-	)
+func (s *service) Run() (err error) {
+	// exit when help flag is provided
+	for _, v := range os.Args[1:] {
+		if v == "-h" || v == "--help" {
+			os.Exit(0)
+		}
+	}
 
 	// start the profiler
 	if s.opts.Profile != nil {
@@ -201,17 +139,22 @@ func (s *service) Run() error {
 		// to view blocking profile
 		rtime.SetBlockProfileRate(1)
 
-		if err := s.opts.Profile.Start(); err != nil {
+		if err = s.opts.Profile.Start(); err != nil {
 			return err
 		}
-		defer s.opts.Profile.Stop()
+		defer func() {
+			err = s.opts.Profile.Stop()
+			if err != nil {
+				logger.Error(err)
+			}
+		}()
 	}
 
 	if logger.V(logger.InfoLevel, logger.DefaultLogger) {
 		logger.Infof("Starting [service] %s", s.Name())
 	}
 
-	if err := s.Start(); err != nil {
+	if err = s.Start(); err != nil {
 		return err
 	}
 

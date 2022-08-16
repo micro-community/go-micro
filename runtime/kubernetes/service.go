@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/runtime"
-	"github.com/micro/go-micro/v2/util/kubernetes/api"
-	"github.com/micro/go-micro/v2/util/kubernetes/client"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/runtime"
+	"go-micro.dev/v4/util/kubernetes/api"
+	"go-micro.dev/v4/util/kubernetes/client"
 )
 
 type service struct {
@@ -73,27 +73,6 @@ func newService(s *runtime.Service, c runtime.CreateOptions) *service {
 	for _, evar := range c.Env {
 		evarPair := strings.Split(evar, "=")
 		env = append(env, client.EnvVar{Name: evarPair[0], Value: evarPair[1]})
-	}
-
-	// if credentials were provided, pass them to the service
-	if len(c.Credentials) > 0 {
-		env = append(env, client.EnvVar{
-			Name: "MICRO_AUTH_ID",
-			ValueFrom: &client.EnvVarSource{
-				SecretKeyRef: &client.SecretKeySelector{
-					Name: c.Credentials, Key: "id",
-				},
-			},
-		})
-
-		env = append(env, client.EnvVar{
-			Name: "MICRO_AUTH_SECRET",
-			ValueFrom: &client.EnvVarSource{
-				SecretKeyRef: &client.SecretKeySelector{
-					Name: c.Credentials, Key: "secret",
-				},
-			},
-		})
 	}
 
 	// if environment has been supplied update deployment default environment

@@ -6,10 +6,10 @@ import (
 	"strings"
 )
 
-// VerifyAccess an account has access to a resource using the rules provided. If the account does not have
+// Verify an account has access to a resource using the rules provided. If the account does not have
 // access an error will be returned. If there are no rules provided which match the resource, an error
 // will be returned
-func VerifyAccess(rules []*Rule, acc *Account, res *Resource) error {
+func Verify(rules []*Rule, acc *Account, res *Resource) error {
 	// the rule is only to be applied if the type matches the resource or is catch-all (*)
 	validTypes := []string{"*", res.Type}
 
@@ -83,7 +83,7 @@ func VerifyAccess(rules []*Rule, acc *Account, res *Resource) error {
 // not case sensitive.
 func include(slice []string, val string) bool {
 	for _, s := range slice {
-		if strings.ToLower(s) == strings.ToLower(val) {
+		if strings.EqualFold(s, val) {
 			return true
 		}
 	}

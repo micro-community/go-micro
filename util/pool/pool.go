@@ -4,7 +4,7 @@ package pool
 import (
 	"time"
 
-	"github.com/micro/go-micro/v2/transport"
+	"go-micro.dev/v4/transport"
 )
 
 // Pool is an interface for connection pooling
@@ -13,7 +13,7 @@ type Pool interface {
 	Close() error
 	// Get a connection
 	Get(addr string, opts ...transport.DialOption) (Conn, error)
-	// Release the connection
+	// Releaes the connection
 	Release(c Conn, status error) error
 }
 

@@ -2,15 +2,15 @@ package cli
 
 import (
 	"flag"
-	"io/ioutil"
+	"io"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/imdario/mergo"
-	"github.com/micro/cli/v2"
-	"github.com/micro/go-micro/v2/cmd"
-	"github.com/micro/go-micro/v2/config/source"
+	"github.com/urfave/cli/v2"
+	"go-micro.dev/v4/config/source"
+	"go-micro.dev/v4/util/cmd"
 )
 
 type cliSource struct {
@@ -84,7 +84,7 @@ func (c *cliSource) String() string {
 	return "cli"
 }
 
-// NewSource returns a config source for integrating parsed flags from a micro/cli.Context.
+// NewSource returns a config source for integrating parsed flags from a urfave/cli.Context.
 // Hyphens are delimiters for nesting, and all keys are lowercased. The assumption is that
 // command line flags have already been parsed.
 //
@@ -119,7 +119,7 @@ func NewSource(opts ...source.Option) source.Source {
 		}
 
 		// parse flags
-		set.SetOutput(ioutil.Discard)
+		set.SetOutput(io.Discard)
 		set.Parse(os.Args[1:])
 
 		// normalise flags

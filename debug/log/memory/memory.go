@@ -4,8 +4,8 @@ package memory
 import (
 	"fmt"
 
-	"github.com/micro/go-micro/v2/debug/log"
-	"github.com/micro/go-micro/v2/util/ring"
+	"go-micro.dev/v4/debug/log"
+	"go-micro.dev/v4/util/ring"
 )
 
 var (

@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/micro/go-micro/v2/logger"
+	"go-micro.dev/v4/logger"
 )
 
 // Request is used to construct a http request for the k8s API.
@@ -90,7 +90,7 @@ func (r *Request) Resource(s string) *Request {
 	return r
 }
 
-// SubResource sets a sub resource on a resource,
+// SubResource sets a subresource on a resource,
 // e.g. pods/log for pod logs
 func (r *Request) SubResource(s string) *Request {
 	r.subResource = &s
@@ -132,7 +132,7 @@ func (r *Request) Body(in interface{}) *Request {
 	return r
 }
 
-// Params is used to set parameters on a request
+// Params isused to set paramters on a request
 func (r *Request) Params(p *Params) *Request {
 	for k, v := range p.LabelSelector {
 		// create new key=value pair

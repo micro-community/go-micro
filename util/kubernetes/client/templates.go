@@ -8,6 +8,8 @@ var templates = map[string]string{
 	"serviceaccount": serviceAccountTmpl,
 }
 
+// stripped image pull policy always
+// imagePullPolicy: Always
 var deploymentTmpl = `
 apiVersion: apps/v1
 kind: Deployment
@@ -60,19 +62,6 @@ spec:
           {{- range . }}
           - name: "{{ .Name }}"
             value: "{{ .Value }}"
-          {{- if .ValueFrom }}
-          {{- with .ValueFrom }}
-            valueFrom: 
-              {{- if .SecretKeyRef }}
-              {{- with .SecretKeyRef }}
-              secretKeyRef:
-                key: {{ .Key }}
-                name: {{ .Name }}
-                optional: {{ .Optional }}
-              {{- end }}
-              {{- end }}
-          {{- end }}
-          {{- end }}
           {{- end }}
           {{- end }}
           args:
@@ -84,7 +73,6 @@ spec:
           - {{.}}
           {{- end }}
           image: {{ .Image }}
-          imagePullPolicy: Always
           ports:
           {{- with .Ports }}
           {{- range . }}

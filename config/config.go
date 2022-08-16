@@ -4,10 +4,10 @@ package config
 import (
 	"context"
 
-	"github.com/micro/go-micro/v2/config/loader"
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/source"
-	"github.com/micro/go-micro/v2/config/source/file"
+	"go-micro.dev/v4/config/loader"
+	"go-micro.dev/v4/config/reader"
+	"go-micro.dev/v4/config/source"
+	"go-micro.dev/v4/config/source/file"
 )
 
 // Config is an interface abstraction for dynamic configuration
@@ -41,6 +41,8 @@ type Options struct {
 
 	// for alternative data
 	Context context.Context
+
+	WithWatcherDisabled bool
 }
 
 type Option func(o *Options)

@@ -2,27 +2,26 @@ package web
 
 import (
 	"crypto/tls"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/micro/cli/v2"
-	"github.com/micro/go-micro/v2"
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/registry"
-	maddr "github.com/micro/go-micro/v2/util/addr"
-	authutil "github.com/micro/go-micro/v2/util/auth"
-	"github.com/micro/go-micro/v2/util/backoff"
-	mhttp "github.com/micro/go-micro/v2/util/http"
-	mnet "github.com/micro/go-micro/v2/util/net"
-	signalutil "github.com/micro/go-micro/v2/util/signal"
-	mls "github.com/micro/go-micro/v2/util/tls"
+	"github.com/urfave/cli/v2"
+	"go-micro.dev/v4"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/registry"
+	maddr "go-micro.dev/v4/util/addr"
+	"go-micro.dev/v4/util/backoff"
+	mhttp "go-micro.dev/v4/util/http"
+	mnet "go-micro.dev/v4/util/net"
+	signalutil "go-micro.dev/v4/util/signal"
+	mls "go-micro.dev/v4/util/tls"
 )
 
 type service struct {
@@ -35,6 +34,7 @@ type service struct {
 	running bool
 	static  bool
 	exit    chan chan error
+	ex      chan bool
 }
 
 func newService(opts ...Option) Service {
@@ -43,6 +43,7 @@ func newService(opts ...Option) Service {
 		opts:   options,
 		mux:    http.NewServeMux(),
 		static: true,
+		ex:     make(chan bool),
 	}
 	s.srv = s.genSrv()
 	return s
@@ -85,13 +86,13 @@ func (s *service) genSrv() *registry.Service {
 		Version: s.opts.Version,
 		Nodes: []*registry.Node{{
 			Id:       s.opts.Id,
-			Address:  fmt.Sprintf("%s:%s", addr, port),
+			Address:  net.JoinHostPort(addr, port),
 			Metadata: s.opts.Metadata,
 		}},
 	}
 }
 
-func (s *service) run(exit chan bool) {
+func (s *service) run() {
 	s.RLock()
 	if s.opts.RegisterInterval <= time.Duration(0) {
 		s.RUnlock()
@@ -105,7 +106,7 @@ func (s *service) run(exit chan bool) {
 		select {
 		case <-t.C:
 			s.register()
-		case <-exit:
+		case <-s.ex:
 			t.Stop()
 			return
 		}
@@ -120,7 +121,7 @@ func (s *service) register() error {
 		return nil
 	}
 	// default to service registry
-	r := s.opts.Service.Options().Registry
+	r := s.opts.Service.Client().Options().Registry
 	// switch to option if specified
 	if s.opts.Registry != nil {
 		r = s.opts.Registry
@@ -141,16 +142,10 @@ func (s *service) register() error {
 
 	var regErr error
 
-	// register options
-	rOpts := []registry.RegisterOption{
-		registry.RegisterTTL(s.opts.RegisterTTL),
-		registry.RegisterDomain(s.opts.Service.Server().Options().Namespace),
-	}
-
 	// try three times if necessary
 	for i := 0; i < 3; i++ {
 		// attempt to register
-		if err := r.Register(s.srv, rOpts...); err != nil {
+		if err := r.Register(s.srv, registry.RegisterTTL(s.opts.RegisterTTL)); err != nil {
 			// set the error
 			regErr = err
 			// backoff then retry
@@ -173,7 +168,7 @@ func (s *service) deregister() error {
 		return nil
 	}
 	// default to service registry
-	r := s.opts.Service.Options().Registry
+	r := s.opts.Service.Client().Options().Registry
 	// switch to option if specified
 	if s.opts.Registry != nil {
 		r = s.opts.Registry
@@ -302,7 +297,7 @@ func (s *service) stop() error {
 
 func (s *service) Client() *http.Client {
 	rt := mhttp.NewRoundTripper(
-		mhttp.WithRouter(s.opts.Service.Options().Router),
+		mhttp.WithRegistry(s.opts.Registry),
 	)
 	return &http.Client{
 		Transport: rt,
@@ -447,12 +442,7 @@ func (s *service) Init(opts ...Option) error {
 	return nil
 }
 
-func (s *service) Run() error {
-	// generate an auth account
-	if err := authutil.Verify(s.opts.Service.Options().Auth); err != nil {
-		return err
-	}
-
+func (s *service) Start() error {
 	if err := s.start(); err != nil {
 		return err
 	}
@@ -462,8 +452,50 @@ func (s *service) Run() error {
 	}
 
 	// start reg loop
-	ex := make(chan bool)
-	go s.run(ex)
+	go s.run()
+
+	return nil
+}
+
+func (s *service) Stop() error {
+	// exit reg loop
+	close(s.ex)
+
+	if err := s.deregister(); err != nil {
+		return err
+	}
+
+	return s.stop()
+}
+
+func (s *service) Run() error {
+	if err := s.start(); err != nil {
+		return err
+	}
+
+	// start the profiler
+	if s.opts.Service.Options().Profile != nil {
+		// to view mutex contention
+		runtime.SetMutexProfileFraction(5)
+		// to view blocking profile
+		runtime.SetBlockProfileRate(1)
+
+		if err := s.opts.Service.Options().Profile.Start(); err != nil {
+			return err
+		}
+		defer func() {
+			if err := s.opts.Service.Options().Profile.Stop(); err != nil {
+				logger.Error(err)
+			}
+		}()
+	}
+
+	if err := s.register(); err != nil {
+		return err
+	}
+
+	// start reg loop
+	go s.run()
 
 	ch := make(chan os.Signal, 1)
 	if s.opts.Signal {
@@ -484,7 +516,7 @@ func (s *service) Run() error {
 	}
 
 	// exit reg loop
-	close(ex)
+	close(s.ex)
 
 	if err := s.deregister(); err != nil {
 		return err

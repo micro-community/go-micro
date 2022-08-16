@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/registry"
-	util "github.com/micro/go-micro/v2/util/registry"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/registry"
+	util "go-micro.dev/v4/util/registry"
+	"golang.org/x/sync/singleflight"
 )
 
 // Cache is the registry cache interface
@@ -31,25 +32,28 @@ type cache struct {
 	registry.Registry
 	opts Options
 
-	// registry cache. services,ttls,watched,running are grouped by doman
+	// registry cache
 	sync.RWMutex
-	services map[string]services
-	ttls     map[string]ttls
-	watched  map[string]watched
-	running  map[string]bool
+	cache   map[string][]*registry.Service
+	ttls    map[string]time.Time
+	watched map[string]bool
 
-	// used to stop the caches
+	// used to stop the cache
 	exit chan bool
 
-	// indicate whether its running status of the registry used to hold onto the cache in failure state
+	// indicate whether its running
+	watchedRunning map[string]bool
+	// status of the registry
+	// used to hold onto the cache
+	// in failure state
 	status error
+	// used to prevent cache breakdwon
+	sg singleflight.Group
 }
 
-type services map[string][]*registry.Service
-type ttls map[string]time.Time
-type watched map[string]bool
-
-var defaultTTL = time.Minute
+var (
+	DefaultTTL = time.Minute
+)
 
 func backoff(attempts int) time.Duration {
 	if attempts == 0 {
@@ -100,56 +104,50 @@ func (c *cache) quit() bool {
 	}
 }
 
-func (c *cache) del(domain, service string) {
+func (c *cache) del(service string) {
 	// don't blow away cache in error state
-	if err := c.getStatus(); err != nil {
+	if err := c.status; err != nil {
 		return
 	}
-
-	c.Lock()
-	defer c.Unlock()
-
-	if _, ok := c.services[domain]; ok {
-		delete(c.services[domain], service)
-	}
-
-	if _, ok := c.ttls[domain]; ok {
-		delete(c.ttls[domain], service)
-	}
+	// otherwise delete entries
+	delete(c.cache, service)
+	delete(c.ttls, service)
 }
 
-func (c *cache) get(domain, service string) ([]*registry.Service, error) {
-	var services []*registry.Service
-	var ttl time.Time
-
-	// lookup the values in the cache before calling the underlying registrry
+func (c *cache) get(service string) ([]*registry.Service, error) {
+	// read lock
 	c.RLock()
-	if srvs, ok := c.services[domain]; ok {
-		services = srvs[service]
-	}
-	if tt, ok := c.ttls[domain]; ok {
-		ttl = tt[service]
-	}
-	c.RUnlock()
 
-	// got services && within ttl so return a copy of the services
-	if c.isValid(services, ttl) {
-		return util.Copy(services), nil
+	// check the cache first
+	services := c.cache[service]
+	// get cache ttl
+	ttl := c.ttls[service]
+	// make a copy
+	cp := util.Copy(services)
+
+	// got services && within ttl so return cache
+	if c.isValid(cp, ttl) {
+		c.RUnlock()
+		// return services
+		return cp, nil
 	}
 
 	// get does the actual request for a service and cache it
-	get := func(domain string, service string, cached []*registry.Service) ([]*registry.Service, error) {
+	get := func(service string, cached []*registry.Service) ([]*registry.Service, error) {
 		// ask the registry
-		services, err := c.Registry.GetService(service, registry.GetDomain(domain))
+		val, err, _ := c.sg.Do(service, func() (interface{}, error) {
+			return c.Registry.GetService(service)
+		})
+		services, _ := val.([]*registry.Service)
 		if err != nil {
-			// set the error status
-			c.setStatus(err)
-
 			// check the cache
 			if len(cached) > 0 {
+				// set the error status
+				c.setStatus(err)
+
+				// return the stale cache
 				return cached, nil
 			}
-
 			// otherwise return error
 			return nil, err
 		}
@@ -160,87 +158,67 @@ func (c *cache) get(domain, service string) ([]*registry.Service, error) {
 		}
 
 		// cache results
-		c.set(domain, service, util.Copy(services))
+		c.Lock()
+		c.set(service, util.Copy(services))
+		c.Unlock()
 
 		return services, nil
 	}
 
 	// watch service if not watched
-	c.RLock()
-	var ok bool
-	if _, d := c.watched[domain]; d {
-		if _, s := c.watched[domain][service]; s {
-			ok = true
-		}
-	}
+	_, ok := c.watched[service]
+
+	// unlock the read lock
 	c.RUnlock()
 
 	// check if its being watched
 	if !ok {
 		c.Lock()
 
-		// add domain if not registered
-		if _, ok := c.watched[domain]; !ok {
-			c.watched[domain] = make(map[string]bool)
-		}
-
 		// set to watched
-		c.watched[domain][service] = true
-
-		running := c.running[domain]
-		c.Unlock()
+		c.watched[service] = true
 
 		// only kick it off if not running
-		if !running {
-			go c.run(domain)
+		if !c.watchedRunning[service] {
+			go c.run(service)
 		}
+
+		c.Unlock()
 	}
 
 	// get and return services
-	return get(domain, service, services)
+	return get(service, cp)
 }
 
-func (c *cache) set(domain string, service string, srvs []*registry.Service) {
-	c.Lock()
-	defer c.Unlock()
-
-	if _, ok := c.services[domain]; !ok {
-		c.services[domain] = make(services)
-	}
-	if _, ok := c.ttls[domain]; !ok {
-		c.ttls[domain] = make(ttls)
-	}
-
-	c.services[domain][service] = srvs
-	c.ttls[domain][service] = time.Now().Add(c.opts.TTL)
+func (c *cache) set(service string, services []*registry.Service) {
+	c.cache[service] = services
+	c.ttls[service] = time.Now().Add(c.opts.TTL)
 }
 
-func (c *cache) update(domain string, res *registry.Result) {
+func (c *cache) update(res *registry.Result) {
 	if res == nil || res.Service == nil {
 		return
 	}
 
-	// only save watched services since the service using the cache may only depend on a handful
-	// of other services
-	c.RLock()
+	c.Lock()
+	defer c.Unlock()
+
+	// only save watched services
 	if _, ok := c.watched[res.Service.Name]; !ok {
-		c.RUnlock()
 		return
 	}
 
-	// we're not going to cache anything unless there was already a lookup
-	services, ok := c.services[domain][res.Service.Name]
+	services, ok := c.cache[res.Service.Name]
 	if !ok {
-		c.RUnlock()
+		// we're not going to cache anything
+		// unless there was already a lookup
 		return
 	}
-
-	c.RUnlock()
 
 	if len(res.Service.Nodes) == 0 {
 		switch res.Action {
 		case "delete":
-			c.del(domain, res.Service.Name)
+			c.del(res.Service.Name)
 		}
 		return
 	}
@@ -258,7 +236,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 	switch res.Action {
 	case "create", "update":
 		if service == nil {
-			c.set(domain, res.Service.Name, append(services, res.Service))
+			c.set(res.Service.Name, append(services, res.Service))
 			return
 		}
 
@@ -277,7 +255,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 		}
 
 		services[index] = res.Service
-		c.set(domain, res.Service.Name, services)
+		c.set(res.Service.Name, services)
 	case "delete":
 		if service == nil {
 			return
@@ -303,7 +281,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 		if len(nodes) > 0 {
 			service.Nodes = nodes
 			services[index] = service
-			c.set(domain, service.Name, services)
+			c.set(service.Name, services)
 			return
 		}
 
@@ -312,7 +290,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 		// only have one thing to delete
 		// nuke the thing
 		if len(services) == 1 {
-			c.del(domain, service.Name)
+			c.del(service.Name)
 			return
 		}
 
@@ -326,22 +304,28 @@ func (c *cache) update(domain string, res *registry.Result) {
 		}
 
 		// save
-		c.set(domain, service.Name, srvs)
+		c.set(service.Name, srvs)
+	case "override":
+		if service == nil {
+			return
+		}
+
+		c.del(service.Name)
 	}
 }
 
 // run starts the cache watcher loop
 // it creates a new watcher if there's a problem
-func (c *cache) run(domain string) {
+func (c *cache) run(service string) {
 	c.Lock()
-	c.running[domain] = true
+	c.watchedRunning[service] = true
 	c.Unlock()
 
 	// reset watcher on exit
 	defer func() {
 		c.Lock()
-		c.watched[domain] = make(map[string]bool)
-		c.running[domain] = false
+		c.watched = make(map[string]bool)
+		c.watchedRunning[service] = false
 		c.Unlock()
 	}()
 
@@ -358,7 +342,7 @@ func (c *cache) run(domain string) {
 		time.Sleep(time.Duration(j) * time.Millisecond)
 
 		// create new watcher
-		w, err := c.Registry.Watch(registry.WatchDomain(domain))
+		w, err := c.Registry.Watch(registry.WatchService(service))
 		if err != nil {
 			if c.quit() {
 				return
@@ -384,7 +368,7 @@ func (c *cache) run(domain string) {
 		a = 0
 
 		// watch for events
-		if err := c.watch(domain, w); err != nil {
+		if err := c.watch(w); err != nil {
 			if c.quit() {
 				return
 			}
@@ -412,7 +396,7 @@ func (c *cache) run(domain string) {
 
 // watch loops the next event and calls update
 // it returns if there's an error
-func (c *cache) watch(domain string, w registry.Watcher) error {
+func (c *cache) watch(w registry.Watcher) error {
 	// used to stop the watch
 	stop := make(chan bool)
 
@@ -443,29 +427,13 @@ func (c *cache) watch(domain string, w registry.Watcher) error {
 			c.setStatus(nil)
 		}
 
-		// for wildcard queries, the domain will be * and not the services domain, so we'll check to
-		// see if it was provided in the metadata.
-		dom := domain
-		if res.Service.Metadata != nil && len(res.Service.Metadata["domain"]) > 0 {
-			dom = res.Service.Metadata["domain"]
-		}
-
-		c.update(dom, res)
+		c.update(res)
 	}
 }
 
 func (c *cache) GetService(service string, opts ...registry.GetOption) ([]*registry.Service, error) {
-	// parse the options, fallback to the default domain
-	var options registry.GetOptions
-	for _, o := range opts {
-		o(&options)
-	}
-	if len(options.Domain) == 0 {
-		options.Domain = registry.DefaultDomain
-	}
-
 	// get the service
-	services, err := c.get(options.Domain, service)
+	services, err := c.get(service)
 	if err != nil {
 		return nil, err
 	}
@@ -499,7 +467,7 @@ func (c *cache) String() string {
 func New(r registry.Registry, opts ...Option) Cache {
 	rand.Seed(time.Now().UnixNano())
 	options := Options{
-		TTL: defaultTTL,
+		TTL: DefaultTTL,
 	}
 
 	for _, o := range opts {
@@ -507,12 +475,12 @@ func New(r registry.Registry, opts ...Option) Cache {
 	}
 
 	return &cache{
-		Registry: r,
-		opts:     options,
-		running:  make(map[string]bool),
-		watched:  make(map[string]watched),
-		services: make(map[string]services),
-		ttls:     make(map[string]ttls),
-		exit:     make(chan bool),
+		Registry:       r,
+		opts:           options,
+		watched:        make(map[string]bool),
+		watchedRunning: make(map[string]bool),
+		cache:          make(map[string][]*registry.Service),
+		ttls:           make(map[string]time.Time),
+		exit:           make(chan bool),
 	}
 }

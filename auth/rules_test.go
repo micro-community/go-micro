@@ -280,7 +280,7 @@ func TestVerify(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.Name, func(t *testing.T) {
-			if err := VerifyAccess(tc.Rules, tc.Account, tc.Resource); err != tc.Error {
+			if err := Verify(tc.Rules, tc.Account, tc.Resource); err != tc.Error {
 				t.Errorf("Expected %v but got %v", tc.Error, err)
 			}
 		})

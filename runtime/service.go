@@ -3,16 +3,15 @@ package runtime
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/runtime/local/build"
-	"github.com/micro/go-micro/v2/runtime/local/process"
-	proc "github.com/micro/go-micro/v2/runtime/local/process/os"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/runtime/local/build"
+	"go-micro.dev/v4/runtime/local/process"
+	proc "go-micro.dev/v4/runtime/local/process/os"
 )
 
 type service struct {
@@ -47,27 +46,6 @@ func newService(s *Service, c CreateOptions) *service {
 	exec = strings.Join(c.Command, " ")
 	args = c.Args
 
-	dir := s.Source
-
-	// For uploaded packages, we upload the whole repo
-	// so the correct working directory to do a `go run .`
-	// needs to include the relative path from the repo root
-	// which is the service name.
-	//
-	// Could use a better upload check.
-	if strings.Contains(s.Source, "uploads") {
-		// There are two cases to consider here:
-		// a., if the uploaded code comes from a repo - in this case
-		// the service name is the relative path.
-		// b., if the uploaded code comes from a non repo folder -
-		// in this case the service name is the folder name.
-		// Because of this, we only append the service name to the source in
-		// case `a`
-		if ex, err := exists(filepath.Join(s.Source, s.Name)); err == nil && ex {
-			dir = filepath.Join(s.Source, s.Name)
-		}
-	}
-
 	return &service{
 		Service: s,
 		Process: new(proc.Process),
@@ -78,7 +56,7 @@ func newService(s *Service, c CreateOptions) *service {
 			},
 			Env:  c.Env,
 			Args: args,
-			Dir:  dir,
+			Dir:  s.Source,
 		},
 		closed:     make(chan bool),
 		output:     c.Output,
@@ -229,7 +207,7 @@ func (s *service) Wait() {
 
 	if s.PID.ID != thisPID.ID {
 		// trying to update when it's already been switched out, ignore
-		logger.Debugf("Trying to update a process status but PID doesn't match. Old %s, New %s. Skipping update.", thisPID.ID, s.PID.ID)
+		logger.Warnf("Trying to update a process status but PID doesn't match. Old %s, New %s. Skipping update.", thisPID.ID, s.PID.ID)
 		return
 	}
 

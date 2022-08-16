@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/micro/go-micro/v2/registry"
+	"go-micro.dev/v4/registry"
 )
 
 func TestRemove(t *testing.T) {

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/ef-ds/deque"
-	"github.com/micro/go-micro/v2/store"
 	"github.com/pkg/errors"
+	"go-micro.dev/v4/store"
 )
 
 // Sync implements a sync in for stores

@@ -8,8 +8,8 @@ import (
 	"time"
 
 	simple "github.com/bitly/go-simplejson"
-	"github.com/micro/go-micro/v2/config/reader"
-	"github.com/micro/go-micro/v2/config/source"
+	"go-micro.dev/v4/config/reader"
+	"go-micro.dev/v4/config/source"
 )
 
 type jsonValues struct {
@@ -21,14 +21,9 @@ type jsonValue struct {
 	*simple.Json
 }
 
-func newValues(ch *source.ChangeSet, opts reader.Options) (reader.Values, error) {
+func newValues(ch *source.ChangeSet) (reader.Values, error) {
 	sj := simple.New()
-	data := ch.Data
-
-	if !opts.DisableReplaceEnvVars {
-		data, _ = reader.ReplaceEnvVars(ch.Data)
-	}
-
+	data, _ := reader.ReplaceEnvVars(ch.Data)
 	if err := sj.UnmarshalJSON(data); err != nil {
 		sj.SetPath(nil, string(ch.Data))
 	}
@@ -162,7 +157,7 @@ func (j *jsonValue) StringSlice(def []string) []string {
 	v, err := j.Json.String()
 	if err == nil {
 		sl := strings.Split(v, ",")
-		if len(sl) > 1 {
+		if len(sl) > 0 {
 			return sl
 		}
 	}

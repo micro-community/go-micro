@@ -1,15 +1,17 @@
 package http
 
-import "github.com/micro/go-micro/v2/router"
+import (
+	"go-micro.dev/v4/registry"
+)
 
 type Options struct {
-	Router router.Router
+	Registry registry.Registry
 }
 
 type Option func(*Options)
 
-func WithRouter(r router.Router) Option {
+func WithRegistry(r registry.Registry) Option {
 	return func(o *Options) {
-		o.Router = r
+		o.Registry = r
 	}
 }

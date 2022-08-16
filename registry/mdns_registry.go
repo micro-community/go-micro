@@ -1,3 +1,4 @@
+// Package mdns is a multicast dns registry
 package registry
 
 import (
@@ -7,7 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"strconv"
 	"strings"
@@ -15,15 +16,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/micro/go-micro/v2/logger"
-	"github.com/micro/go-micro/v2/util/mdns"
+	"go-micro.dev/v4/logger"
+	"go-micro.dev/v4/util/mdns"
 )
 
-const (
-	// every service is written to the global domain so * domain queries work, e.g.
-	// calling mdns.List(registry.ListDomain("*")) will list the services across all
-	// domains
-	globalDomain = "global"
+var (
+	// use a .micro domain rather than .local
+	mdnsDomain = "micro"
 )
 
 type mdnsTxt struct {
@@ -38,21 +37,13 @@ type mdnsEntry struct {
 	node *mdns.Server
 }
 
-// services are a key/value map, with the service name as a key and the value being a
-// slice of mdns entries, representing the nodes with a single _services entry to be
-// used for listing
-type services map[string][]*mdnsEntry
-
-// mdsRegistry is a multicast dns registry
 type mdnsRegistry struct {
 	opts Options
-
-	// the top level domains, these can be overriden using options
-	defaultDomain string
-	globalDomain  string
+	// the mdns domain
+	domain string
 
 	sync.Mutex
-	domains map[string]services
+	services map[string][]*mdnsEntry
 
 	mtx sync.RWMutex
 
@@ -84,22 +75,13 @@ func encode(txt *mdnsTxt) ([]string, error) {
 	defer buf.Reset()
 
 	w := zlib.NewWriter(&buf)
-	defer func() {
-		if closeErr := w.Close(); closeErr != nil {
-			if logger.V(logger.ErrorLevel, logger.DefaultLogger) {
-				logger.Errorf("[mdns] registry close encoding writer err: %v", closeErr)
-			}
-		}
-	}()
 	if _, err := w.Write(b); err != nil {
 		return nil, err
 	}
-
-	if err = w.Close(); err != nil {
-		return nil, err
-	}
+	w.Close()
 
 	encoded := hex.EncodeToString(buf.Bytes())
+
 	// individual txt limit
 	if len(encoded) <= 255 {
 		return []string{encoded}, nil
@@ -131,9 +113,8 @@ func decode(record []string) (*mdnsTxt, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer zr.Close()
 
-	rbuf, err := ioutil.ReadAll(zr)
+	rbuf, err := io.ReadAll(zr)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +127,6 @@ func decode(record []string) (*mdnsTxt, error) {
 
 	return txt, nil
 }
-
 func newRegistry(opts ...Option) Registry {
 	options := Options{
 		Context: context.Background(),
@@ -158,17 +138,18 @@ func newRegistry(opts ...Option) Registry {
 	}
 
 	// set the domain
-	defaultDomain := DefaultDomain
-	if d, ok := options.Context.Value("mdns.domain").(string); ok {
-		defaultDomain = d
+	domain := mdnsDomain
+
+	d, ok := options.Context.Value("mdns.domain").(string)
+	if ok {
+		domain = d
 	}
 
 	return &mdnsRegistry{
-		defaultDomain: defaultDomain,
-		globalDomain:  globalDomain,
-		opts:          options,
-		domains:       make(map[string]services),
-		watchers:      make(map[string]*mdnsWatcher),
+		opts:     options,
+		domain:   domain,
+		services: make(map[string][]*mdnsEntry),
+		watchers: make(map[string]*mdnsWatcher),
 	}
 }
 
@@ -183,54 +164,55 @@ func (m *mdnsRegistry) Options() Options {
 	return m.opts
 }
 
-// createServiceMDNSEntry will create a new wildcard mdns entry for the service in the
-// given domain. This wildcard mdns entry is used when listing services.
-func createServiceMDNSEntry(name, domain string) (*mdnsEntry, error) {
-	ip := net.ParseIP("0.0.0.0")
+func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error {
+	m.Lock()
+	defer m.Unlock()
 
-	s, err := mdns.NewMDNSService(name, "_services", domain+".", "", 9999, []net.IP{ip}, nil)
-	if err != nil {
-		return nil, err
+	entries, ok := m.services[service.Name]
+	// first entry, create wildcard used for list queries
+	if !ok {
+		s, err := mdns.NewMDNSService(
+			service.Name,
+			"_services",
+			m.domain+".",
+			"",
+			9999,
+			[]net.IP{net.ParseIP("0.0.0.0")},
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+
+		srv, err := mdns.NewServer(&mdns.Config{Zone: &mdns.DNSSDService{MDNSService: s}})
+		if err != nil {
+			return err
+		}
+
+		// append the wildcard entry
+		entries = append(entries, &mdnsEntry{id: "*", node: srv})
 	}
 
-	srv, err := mdns.NewServer(&mdns.Config{Zone: &mdns.DNSSDService{MDNSService: s}, LocalhostChecking: true})
-	if err != nil {
-		return nil, err
-	}
+	var gerr error
 
-	return &mdnsEntry{id: "*", node: srv}, nil
-}
-
-func (m *mdnsRegistry) getMdnsEntries(domain, serviceName string) ([]*mdnsEntry, error) {
-	entries, ok := m.domains[domain][serviceName]
-	if ok {
-		return entries, nil
-	}
-
-	// create the wildcard entry used for list queries in this domain
-	entry, err := createServiceMDNSEntry(serviceName, domain)
-	if err != nil {
-		return nil, err
-	}
-
-	return []*mdnsEntry{entry}, nil
-}
-
-func registerService(service *Service, entries []*mdnsEntry, options RegisterOptions) ([]*mdnsEntry, error) {
-	var lastError error
 	for _, node := range service.Nodes {
 		var seen bool
+		var e *mdnsEntry
 
 		for _, entry := range entries {
 			if node.Id == entry.id {
 				seen = true
+				e = entry
 				break
 			}
 		}
 
-		// this node has already been registered, continue
+		// already registered, continue
 		if seen {
 			continue
+			// doesn't exist
+		} else {
+			e = &mdnsEntry{}
 		}
 
 		txt, err := encode(&mdnsTxt{
@@ -241,13 +223,13 @@ func registerService(service *Service, entries []*mdnsEntry, options RegisterOpt
 		})
 
 		if err != nil {
-			lastError = err
+			gerr = err
 			continue
 		}
 
 		host, pt, err := net.SplitHostPort(node.Address)
 		if err != nil {
-			lastError = err
+			gerr = err
 			continue
 		}
 		port, _ := strconv.Atoi(pt)
@@ -259,120 +241,42 @@ func registerService(service *Service, entries []*mdnsEntry, options RegisterOpt
 		s, err := mdns.NewMDNSService(
 			node.Id,
 			service.Name,
-			options.Domain+".",
+			m.domain+".",
 			"",
 			port,
 			[]net.IP{net.ParseIP(host)},
 			txt,
 		)
 		if err != nil {
-			lastError = err
+			gerr = err
 			continue
 		}
 
 		srv, err := mdns.NewServer(&mdns.Config{Zone: s, LocalhostChecking: true})
 		if err != nil {
-			lastError = err
+			gerr = err
 			continue
 		}
 
-		entries = append(entries, &mdnsEntry{id: node.Id, node: srv})
+		e.id = node.Id
+		e.node = srv
+		entries = append(entries, e)
 	}
 
-	return entries, lastError
-}
-
-func createGlobalDomainService(service *Service, options RegisterOptions) *Service {
-	srv := *service
-	srv.Nodes = nil
-
-	for _, n := range service.Nodes {
-		node := n
-
-		// set the original domain in node metadata
-		if node.Metadata == nil {
-			node.Metadata = map[string]string{"domain": options.Domain}
-		} else {
-			node.Metadata["domain"] = options.Domain
-		}
-
-		srv.Nodes = append(srv.Nodes, node)
-	}
-
-	return &srv
-}
-
-func (m *mdnsRegistry) Register(service *Service, opts ...RegisterOption) error {
-	m.Lock()
-
-	// parse the options
-	var options RegisterOptions
-	for _, o := range opts {
-		o(&options)
-	}
-	if len(options.Domain) == 0 {
-		options.Domain = m.defaultDomain
-	}
-
-	// create the domain in the memory store if it doesn't yet exist
-	if _, ok := m.domains[options.Domain]; !ok {
-		m.domains[options.Domain] = make(services)
-	}
-
-	entries, err := m.getMdnsEntries(options.Domain, service.Name)
-	if err != nil {
-		m.Unlock()
-		return err
-	}
-
-	entries, gerr := registerService(service, entries, options)
-
-	// save the mdns entry
-	m.domains[options.Domain][service.Name] = entries
-	m.Unlock()
-
-	// register in the global Domain so it can be queried as one
-	if options.Domain != m.globalDomain {
-		srv := createGlobalDomainService(service, options)
-		if err := m.Register(srv, append(opts, RegisterDomain(m.globalDomain))...); err != nil {
-			gerr = err
-		}
-	}
+	// save
+	m.services[service.Name] = entries
 
 	return gerr
 }
 
 func (m *mdnsRegistry) Deregister(service *Service, opts ...DeregisterOption) error {
-	// parse the options
-	var options DeregisterOptions
-	for _, o := range opts {
-		o(&options)
-	}
-	if len(options.Domain) == 0 {
-		options.Domain = m.defaultDomain
-	}
-
-	// register in the global Domain
-	var err error
-	if options.Domain != m.globalDomain {
-		defer func() {
-			err = m.Deregister(service, append(opts, DeregisterDomain(m.globalDomain))...)
-		}()
-	}
-
-	// we want to unlock before we call deregister on the global domain, so it's important this unlock
-	// is applied after the defer m.Deregister is called above
 	m.Lock()
 	defer m.Unlock()
 
-	// the service wasn't registered, we can safely exist
-	if _, ok := m.domains[options.Domain]; !ok {
-		return err
-	}
+	var newEntries []*mdnsEntry
 
 	// loop existing entries, check if any match, shutdown those that do
-	var newEntries []*mdnsEntry
-	for _, entry := range m.domains[options.Domain][service.Name] {
+	for _, entry := range m.services[service.Name] {
 		var remove bool
 
 		for _, node := range service.Nodes {
@@ -389,48 +293,18 @@ func (m *mdnsRegistry) Deregister(service *Service, opts ...DeregisterOption) er
 		}
 	}
 
-	// we have no new entries, we can exit
-	if len(newEntries) == 0 {
-		return nil
-	}
-
-	// we have more than one entry remaining, we can exit
-	if len(newEntries) > 1 {
-		m.domains[options.Domain][service.Name] = newEntries
-		return err
-	}
-
-	// our remaining entry is not a wildcard, we can exit
-	if len(newEntries) == 1 && newEntries[0].id != "*" {
-		m.domains[options.Domain][service.Name] = newEntries
-		return err
-	}
-
 	// last entry is the wildcard for list queries. Remove it.
-	newEntries[0].node.Shutdown()
-	delete(m.domains[options.Domain], service.Name)
-
-	// check to see if we can delete the domain entry
-	if len(m.domains[options.Domain]) == 0 {
-		delete(m.domains, options.Domain)
+	if len(newEntries) == 1 && newEntries[0].id == "*" {
+		newEntries[0].node.Shutdown()
+		delete(m.services, service.Name)
+	} else {
+		m.services[service.Name] = newEntries
 	}
 
-	return err
+	return nil
 }
 
 func (m *mdnsRegistry) GetService(service string, opts ...GetOption) ([]*Service, error) {
-	// parse the options
-	var options GetOptions
-	for _, o := range opts {
-		o(&options)
-	}
-	if len(options.Domain) == 0 {
-		options.Domain = m.defaultDomain
-	}
-	if options.Domain == WildcardDomain {
-		options.Domain = m.globalDomain
-	}
-
 	serviceMap := make(map[string]*Service)
 	entries := make(chan *mdns.ServiceEntry, 10)
 	done := make(chan bool)
@@ -443,14 +317,17 @@ func (m *mdnsRegistry) GetService(service string, opts ...GetOption) ([]*Service
 	// set entries channel
 	p.Entries = entries
 	// set the domain
-	p.Domain = options.Domain
+	p.Domain = m.domain
 
 	go func() {
 		for {
 			select {
 			case e := <-entries:
 				// list record so skip
-				if e.Name == "_services" {
+				if p.Service == "_services" {
+					continue
+				}
+				if p.Domain != m.domain {
 					continue
 				}
 				if e.TTL == 0 {
@@ -477,10 +354,10 @@ func (m *mdnsRegistry) GetService(service string, opts ...GetOption) ([]*Service
 				addr := ""
 				// prefer ipv4 addrs
 				if len(e.AddrV4) > 0 {
-					addr = e.AddrV4.String()
+					addr = net.JoinHostPort(e.AddrV4.String(), fmt.Sprint(e.Port))
 					// else use ipv6
 				} else if len(e.AddrV6) > 0 {
-					addr = "[" + e.AddrV6.String() + "]"
+					addr = net.JoinHostPort(e.AddrV6.String(), fmt.Sprint(e.Port))
 				} else {
 					if logger.V(logger.InfoLevel, logger.DefaultLogger) {
 						logger.Infof("[mdns]: invalid endpoint received: %v", e)
@@ -489,7 +366,7 @@ func (m *mdnsRegistry) GetService(service string, opts ...GetOption) ([]*Service
 				}
 				s.Nodes = append(s.Nodes, &Node{
 					Id:       strings.TrimSuffix(e.Name, "."+p.Service+"."+p.Domain+"."),
-					Address:  fmt.Sprintf("%s:%d", addr, e.Port),
+					Address:  addr,
 					Metadata: txt.Metadata,
 				})
 
@@ -520,18 +397,6 @@ func (m *mdnsRegistry) GetService(service string, opts ...GetOption) ([]*Service
 }
 
 func (m *mdnsRegistry) ListServices(opts ...ListOption) ([]*Service, error) {
-	// parse the options
-	var options ListOptions
-	for _, o := range opts {
-		o(&options)
-	}
-	if len(options.Domain) == 0 {
-		options.Domain = m.defaultDomain
-	}
-	if options.Domain == WildcardDomain {
-		options.Domain = m.globalDomain
-	}
-
 	serviceMap := make(map[string]bool)
 	entries := make(chan *mdns.ServiceEntry, 10)
 	done := make(chan bool)
@@ -544,7 +409,7 @@ func (m *mdnsRegistry) ListServices(opts ...ListOption) ([]*Service, error) {
 	// set entries channel
 	p.Entries = entries
 	// set domain
-	p.Domain = options.Domain
+	p.Domain = m.domain
 
 	var services []*Service
 
@@ -586,19 +451,13 @@ func (m *mdnsRegistry) Watch(opts ...WatchOption) (Watcher, error) {
 	for _, o := range opts {
 		o(&wo)
 	}
-	if len(wo.Domain) == 0 {
-		wo.Domain = m.defaultDomain
-	}
-	if wo.Domain == WildcardDomain {
-		wo.Domain = m.globalDomain
-	}
 
 	md := &mdnsWatcher{
 		id:       uuid.New().String(),
 		wo:       wo,
 		ch:       make(chan *mdns.ServiceEntry, 32),
 		exit:     make(chan struct{}),
-		domain:   wo.Domain,
+		domain:   m.domain,
 		registry: m,
 	}
 
@@ -715,7 +574,6 @@ func (m *mdnsWatcher) Next() (*Result, error) {
 				Name:      txt.Service,
 				Version:   txt.Version,
 				Endpoints: txt.Endpoints,
-				Metadata:  txt.Metadata,
 			}
 
 			// skip anything without the domain we care about
@@ -726,16 +584,16 @@ func (m *mdnsWatcher) Next() (*Result, error) {
 
 			var addr string
 			if len(e.AddrV4) > 0 {
-				addr = e.AddrV4.String()
+				addr = net.JoinHostPort(e.AddrV4.String(), fmt.Sprint(e.Port))
 			} else if len(e.AddrV6) > 0 {
-				addr = "[" + e.AddrV6.String() + "]"
+				addr = net.JoinHostPort(e.AddrV6.String(), fmt.Sprint(e.Port))
 			} else {
 				addr = e.Addr.String()
 			}
 
 			service.Nodes = append(service.Nodes, &Node{
 				Id:       strings.TrimSuffix(e.Name, suffix),
-				Address:  fmt.Sprintf("%s:%d", addr, e.Port),
+				Address:  addr,
 				Metadata: txt.Metadata,
 			})
 

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/micro/go-micro/v2/api/resolver"
+	"go-micro.dev/v4/api/resolver"
 )
 
 func NewResolver(opts ...resolver.Option) resolver.Resolver {
@@ -22,41 +22,36 @@ var (
 	re = regexp.MustCompile("^v[0-9]+$")
 )
 
-func (r *Resolver) Resolve(req *http.Request, opts ...resolver.ResolveOption) (*resolver.Endpoint, error) {
+func (r *Resolver) Resolve(req *http.Request) (*resolver.Endpoint, error) {
 	if req.URL.Path == "/" {
 		return nil, errors.New("unknown name")
 	}
 
-	options := resolver.NewResolveOptions(opts...)
-
 	parts := strings.Split(req.URL.Path[1:], "/")
 	if len(parts) == 1 {
 		return &resolver.Endpoint{
-			Name:   r.withPrefix(parts...),
+			Name:   r.withNamespace(req, parts...),
 			Host:   req.Host,
 			Method: req.Method,
 			Path:   req.URL.Path,
-			Domain: options.Domain,
 		}, nil
 	}
 
 	// /v1/foo
 	if re.MatchString(parts[0]) {
 		return &resolver.Endpoint{
-			Name:   r.withPrefix(parts[0:2]...),
+			Name:   r.withNamespace(req, parts[0:2]...),
 			Host:   req.Host,
 			Method: req.Method,
 			Path:   req.URL.Path,
-			Domain: options.Domain,
 		}, nil
 	}
 
 	return &resolver.Endpoint{
-		Name:   r.withPrefix(parts[0]),
+		Name:   r.withNamespace(req, parts[0]),
 		Host:   req.Host,
 		Method: req.Method,
 		Path:   req.URL.Path,
-		Domain: options.Domain,
 	}, nil
 }
 
@@ -64,12 +59,11 @@ func (r *Resolver) String() string {
 	return "path"
 }
 
-// withPrefix transforms "foo" into "go.micro.api.foo"
-func (r *Resolver) withPrefix(parts ...string) string {
-	p := r.opts.ServicePrefix
-	if len(p) > 0 {
-		parts = append([]string{p}, parts...)
+func (r *Resolver) withNamespace(req *http.Request, parts ...string) string {
+	ns := r.opts.Namespace(req)
+	if len(ns) == 0 {
+		return strings.Join(parts, ".")
 	}
 
-	return strings.Join(parts, ".")
+	return strings.Join(append([]string{ns}, parts...), ".")
 }
